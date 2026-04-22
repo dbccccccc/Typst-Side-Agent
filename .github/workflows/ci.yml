@@ -13,10 +13,10 @@ jobs:
       matrix:
         node-version: ['22']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
 
@@ -27,14 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build unpacked extension zip
         run: |
           zip -r typst-side-agent.zip manifest.json src docs icons README.md LICENSE \
             -x '*.DS_Store' -x '*/.*'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: typst-side-agent-unpacked
           path: typst-side-agent.zip
