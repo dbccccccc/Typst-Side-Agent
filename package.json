@@ -1,0 +1,16 @@
+{
+  "name": "typst-side-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension: Typst Side Agent — AI assistant for typst.app with custom tools and MCP servers",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "check": "node scripts/check-syntax.mjs"
+  }
+}

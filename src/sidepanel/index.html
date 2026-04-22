@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="color-scheme" content="dark light">
+  <title>Typst Side Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <div id="tab-gate-banner" class="banner hidden">
+      Switch to a typst.app tab to start using the agent.
+    </div>
+
+    <header class="header">
+      <div class="header-left">
+        <div class="dropdown" id="session-dropdown">
+          <button id="session-current" type="button" class="header-btn" title="Switch chat">
+            <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span id="session-name">New chat</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div id="session-menu" class="dropdown-menu hidden">
+            <div id="session-list" class="dropdown-list"></div>
+            <button id="session-new" type="button" class="dropdown-action">+ New chat</button>
+            <button id="session-manage" type="button" class="dropdown-action dropdown-action-sub" title="View all sessions across every project">Manage all chats…</button>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="dropdown" id="model-selector">
+          <button id="model-current" type="button" class="header-btn header-btn-sm" title="Active model">
+            <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span id="model-name">No model</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div id="model-menu" class="dropdown-menu dropdown-menu-right hidden">
+            <div id="model-list"></div>
+          </div>
+        </div>
+        <button id="settings-toggle" type="button" class="icon-btn" title="Settings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="settings-panel" class="settings-panel collapsed">
+      <div class="settings-inner">
+        <nav class="settings-tabs" id="settings-tabs">
+          <button type="button" class="settings-tab active" data-tab="general">General</button>
+          <button type="button" class="settings-tab" data-tab="models">Models</button>
+          <button type="button" class="settings-tab" data-tab="tools">Tools</button>
+          <button type="button" class="settings-tab" data-tab="mcp">MCP</button>
+          <button type="button" class="settings-tab" data-tab="sessions">Sessions</button>
+        </nav>
+
+        <!-- ----- General ----- -->
+        <section class="settings-tab-pane active" data-pane="general">
+          <div class="settings-section">
+            <div class="settings-label">Appearance</div>
+            <div class="seg-switch" id="theme-switch">
+              <button type="button" data-theme="light" class="seg-opt">Light</button>
+              <button type="button" data-theme="dark" class="seg-opt active">Dark</button>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">History cap</div>
+            <label class="field"><span>Maximum chat messages forwarded to the model (older ones are summarised away)</span>
+              <input id="history-cap" type="number" min="8" max="200" step="1" value="40">
+            </label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">Auto-name sessions</div>
+            <label class="field"><span>Model used to generate a short title for a new chat once the first reply lands. Sessions you have already renamed are left alone.</span>
+              <select id="auto-name-model">
+                <option value="">Off (never auto-name)</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">System prompt</div>
+            <label class="field">
+              <textarea id="system-prompt" rows="5" placeholder="Leave empty to use the built-in default."></textarea>
+            </label>
+            <div class="form-actions">
+              <button id="save-general-settings" type="button" class="btn btn-primary">Save</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ----- Models ----- -->
+        <section class="settings-tab-pane" data-pane="models">
+          <div class="settings-section">
+            <div class="settings-label">Configured models</div>
+            <div id="model-registry" class="model-registry"></div>
+            <button id="add-model-btn" type="button" class="ghost-btn">+ Add model</button>
+            <div id="model-form" class="entity-form hidden">
+              <div class="entity-form-title" id="model-form-title">Add model</div>
+              <input type="hidden" id="model-form-id">
+              <label class="field"><span>Name</span><input id="mf-name" type="text" placeholder="GPT-4o" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>API base URL</span><input id="mf-base-url" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>API key</span><input id="mf-api-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Model ID</span><input id="mf-model-id" type="text" placeholder="gpt-4o" autocomplete="off" spellcheck="false"></label>
+              <label class="check-field"><input id="mf-vision" type="checkbox"><span>Supports vision</span></label>
+              <label class="field"><span>Reasoning effort (for thinking models — sent as <code>reasoning_effort</code>)</span>
+                <select id="mf-reasoning-effort">
+                  <option value="default">Default</option>
+                  <option value="minimal">Minimal</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <div class="form-actions">
+                <button id="mf-cancel" type="button" class="btn btn-ghost">Cancel</button>
+                <button id="mf-save" type="button" class="btn btn-primary">Save</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ----- Custom tools ----- -->
+        <section class="settings-tab-pane" data-pane="tools">
+          <div class="settings-section">
+            <div class="settings-label">Custom tools</div>
+            <p class="settings-help">A custom tool is an HTTP endpoint the agent can call as a function. The extension POSTs <code>{"tool", "arguments"}</code> and forwards the JSON response back to the model.</p>
+            <div id="tool-registry" class="entity-registry"></div>
+            <button id="add-tool-btn" type="button" class="ghost-btn">+ Add custom tool</button>
+            <div id="tool-form" class="entity-form hidden">
+              <div class="entity-form-title" id="tool-form-title">Add custom tool</div>
+              <input type="hidden" id="tool-form-id">
+              <label class="field"><span>Function name (lowercase letters, digits, underscores)</span><input id="tf-name" type="text" placeholder="search_arxiv" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Description (one sentence)</span><input id="tf-desc" type="text" placeholder="Search arXiv for recent papers." autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Endpoint URL (POST)</span><input id="tf-endpoint" type="text" placeholder="https://example.com/agent-tool" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Headers (JSON, optional)</span><textarea id="tf-headers" rows="2" placeholder='{"Authorization": "Bearer ..."}' spellcheck="false"></textarea></label>
+              <label class="field"><span>Parameters (JSON Schema)</span><textarea id="tf-params" rows="6" placeholder='{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}' spellcheck="false"></textarea></label>
+              <label class="check-field"><input id="tf-enabled" type="checkbox" checked><span>Enabled</span></label>
+              <div class="form-actions">
+                <button id="tool-cancel" type="button" class="btn btn-ghost">Cancel</button>
+                <button id="tool-save" type="button" class="btn btn-primary">Save</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ----- MCP ----- -->
+        <section class="settings-tab-pane" data-pane="mcp">
+          <div class="settings-section">
+            <div class="settings-label">MCP servers (Streamable HTTP)</div>
+            <p class="settings-help">Connect to a Model Context Protocol server. The extension calls <code>tools/list</code> and exposes each tool to the model with the prefix <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>.</p>
+            <div id="mcp-registry" class="entity-registry"></div>
+            <button id="add-mcp-btn" type="button" class="ghost-btn">+ Add MCP server</button>
+            <div id="mcp-form" class="entity-form hidden">
+              <div class="entity-form-title" id="mcp-form-title">Add MCP server</div>
+              <input type="hidden" id="mcp-form-id">
+              <label class="field"><span>Name</span><input id="mcp-name" type="text" placeholder="local" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Endpoint URL</span><input id="mcp-url" type="text" placeholder="https://localhost:7000/mcp" autocomplete="off" spellcheck="false"></label>
+              <label class="field"><span>Headers (JSON, optional)</span><textarea id="mcp-headers" rows="2" placeholder='{"Authorization": "Bearer ..."}' spellcheck="false"></textarea></label>
+              <label class="check-field"><input id="mcp-enabled" type="checkbox" checked><span>Enabled</span></label>
+              <div id="mcp-probe-result" class="probe-result hidden"></div>
+              <div class="form-actions form-actions-spread">
+                <button id="mcp-probe" type="button" class="btn btn-ghost">Probe tools</button>
+                <div class="form-actions">
+                  <button id="mcp-cancel" type="button" class="btn btn-ghost">Cancel</button>
+                  <button id="mcp-save" type="button" class="btn btn-primary">Save</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ----- Sessions manager ----- -->
+        <section class="settings-tab-pane" data-pane="sessions">
+          <div class="settings-section">
+            <div class="settings-label">Chat sessions across projects</div>
+            <p class="settings-help">Every chat you've had on any typst.app project. Click a session to open it (if the project is currently active), rename inline, or delete. Use the project actions to open it in a new tab or wipe all of its chats.</p>
+            <div class="sessions-toolbar">
+              <input id="sessions-search" type="text" placeholder="Filter by name, project id, or message…" autocomplete="off" spellcheck="false">
+              <div class="sessions-toolbar-actions">
+                <button id="sessions-refresh" type="button" class="btn btn-ghost" title="Reload list">Refresh</button>
+                <button id="sessions-export" type="button" class="btn btn-ghost" title="Download every session as JSON">Export</button>
+                <button id="sessions-import" type="button" class="btn btn-ghost" title="Import sessions from a JSON file">Import</button>
+                <input id="sessions-import-file" type="file" accept="application/json,.json" class="hidden">
+              </div>
+            </div>
+            <div id="sessions-summary" class="sessions-summary"></div>
+            <div id="sessions-projects" class="sessions-projects"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div id="messages" class="messages"></div>
+
+    <div class="composer">
+      <div class="context-bar">
+        <div class="add-context-wrap" id="add-context-wrap">
+          <button type="button" id="add-context-btn" class="add-context-btn" title="Add context for the AI">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            Add
+          </button>
+          <div id="add-context-menu" class="add-context-menu hidden" role="menu">
+            <button type="button" class="add-context-opt" data-add="selection" role="menuitem">
+              <span class="opt-title">Editor selection</span>
+              <span class="opt-hint">Attach the currently highlighted text.</span>
+            </button>
+            <button type="button" class="add-context-opt" data-add="preview" role="menuitem">
+              <span class="opt-title">Preview screenshot</span>
+              <span class="opt-hint">Capture the Typst render canvas.</span>
+            </button>
+            <button type="button" class="add-context-opt" data-add="opened_image" role="menuitem">
+              <span class="opt-title">Opened image file</span>
+              <span class="opt-hint">Use the image shown in the preview column.</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="context-attachments" class="context-attachments"></div>
+      <div class="input-row">
+        <textarea id="user-input" rows="1" placeholder="Describe what you want the agent to do…"></textarea>
+        <button id="send-btn" type="button" class="send-btn" title="Send"></button>
+      </div>
+      <div id="status" class="status-bar"></div>
+    </div>
+  </div>
+
+  <script src="lib/marked.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
