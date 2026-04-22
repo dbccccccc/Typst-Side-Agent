@@ -1,8 +1,29 @@
-# Typst Side Agent
+<p align="center">
+  <img src="./icons/icon128.png" alt="Typst Side Agent icon" width="96" height="96" />
+</p>
 
-A multi-step AI coding assistant for [typst.app](https://typst.app), packaged as
-a Chrome (Manifest V3) extension. It opens in the side panel beside your typst
-editor and can:
+<h1 align="center">Typst Side Agent</h1>
+
+<p align="center">
+  Multi-step AI coding assistant for <a href="https://typst.app">typst.app</a>, built as a Chrome (MV3) side-panel extension.
+</p>
+
+<p align="center">
+  <a href="https://github.com/dbccccccc/Typst-Side-Agent/releases"><img alt="Release" src="https://img.shields.io/github/v/release/dbccccccc/Typst-Side-Agent?display_name=tag&sort=semver" /></a>
+  <a href="https://github.com/dbccccccc/Typst-Side-Agent/stargazers"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/dbccccccc/Typst-Side-Agent?style=flat" /></a>
+  <a href="https://github.com/dbccccccc/Typst-Side-Agent/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/dbccccccc/Typst-Side-Agent/ci.yml?branch=main&label=CI" /></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" /></a>
+</p>
+
+<p align="center">
+  <a href="#install-development">Install</a> •
+  <a href="#first-time-setup">Setup</a> •
+  <a href="#built-in-tools">Tools</a> •
+  <a href="#mcp-servers">MCP</a> •
+  <a href="#project-layout">Project Layout</a>
+</p>
+
+Typst Side Agent opens in the side panel beside your Typst editor and can:
 
 - Read the live editor (with line numbers and workspace UI hints)
 - Edit the document with line-precise tools and a multi-edit `patch_document`
@@ -296,7 +317,7 @@ typst-side-agent/
 
 1. Fork and clone.
 2. `npm test` — the suite is dependency-free, runs on Node ≥ 20, and finishes
-   in well under a second. CI runs the same command on Node 20 and 22.
+   in well under a second. CI runs the same command on Node 22.
 3. Load the unpacked extension from your checkout (`chrome://extensions` →
    **Load unpacked**) and iterate.
 4. See [`TESTING.md`](./TESTING.md) for the full testing process: static
