@@ -305,11 +305,7 @@ typst-side-agent/
 
 ## Privacy
 
-- API keys, custom-tool headers, and MCP headers live in
-  `chrome.storage.local`. They never leave the browser except to the
-  configured model / tool / MCP endpoints.
-- The extension never uploads pages or images on its own; it only sends what
-  you attach to a turn or what tools explicitly fetch.
+See [`PRIVACY.md`](./PRIVACY.md) for the complete privacy policy and data-handling details.
 
 ---
 
