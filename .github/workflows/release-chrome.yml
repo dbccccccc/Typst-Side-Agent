@@ -1,0 +1,39 @@
+name: Release to Chrome Web Store
+
+# Publishes only when a GitHub Release is published and is NOT marked pre-release.
+# Pre-releases (e.g. v1.0.0-beta.1) and tag-only pushes do not trigger this workflow.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build extension zip
+        run: |
+          zip -r typst-side-agent.zip manifest.json src docs icons README.md LICENSE \
+            -x '*.DS_Store' -x '*/.*'
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: typst-side-agent-release
+          path: typst-side-agent.zip
+          retention-days: 90
+
+      - name: Upload and publish to Chrome Web Store
+        uses: browser-actions/release-chrome-extension@v0
+        with:
+          extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
+          extension-path: typst-side-agent.zip
+          oauth-client-id: ${{ secrets.CHROME_CLIENT_ID }}
+          oauth-client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
+          oauth-refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}

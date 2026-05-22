@@ -207,9 +207,19 @@ image asset, and at least one compile error. Budget ~10 minutes.
    zip -r typst-side-agent.zip manifest.json src docs icons README.md LICENSE
    ```
    (CI produces this artifact automatically on every push.)
-6. Tag: `git tag vX.Y.Z && git push --tags`.
-7. Upload the zip to the GitHub release and, if publishing to the Chrome Web
-   Store, to the developer dashboard.
+6. Publish a **non–pre-release** GitHub Release (triggers
+   `.github/workflows/release-chrome.yml` when secrets are set):
+   - On GitHub → **Releases** → **Draft a new release**
+   - Tag `vX.Y.Z` pointing at the release commit on `main`
+   - Leave **Set as a pre-release** **unchecked** (test builds must keep it checked;
+     those releases do not upload to the Chrome Web Store)
+   - Click **Publish release**
+   The workflow checks out that tag, runs `npm test`, zips the extension, uploads it
+   to the Chrome Web Store, and submits it for review. Watch **Actions → Release to
+   Chrome Web Store**. A zip artifact is kept on the workflow run for 90 days.
+7. Pushing a tag alone or publishing a pre-release does **not** trigger Chrome
+   publishing. Manual dashboard upload is only needed if you skip the automated
+   workflow.
 
 ---
 

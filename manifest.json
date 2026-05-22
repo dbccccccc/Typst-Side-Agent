@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Typst Side Agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Multi-step AI assistant in Chrome's side panel for typst.app, with custom tools and MCP servers.",
   "permissions": [
     "sidePanel",
