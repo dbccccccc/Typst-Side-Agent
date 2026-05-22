@@ -15,6 +15,10 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
       - name: Run tests
         run: npm test
 

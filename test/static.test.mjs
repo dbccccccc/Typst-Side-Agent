@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { glob } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { listShippedJs } from '../scripts/list-shipped-js.mjs';
 
 const execFile = promisify(execFileCb);
 const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -49,19 +49,8 @@ test('manifest.json: service_worker and content_scripts point at real files', as
 
 // ---------- Syntax check on every shipped JS module ----------
 
-async function listShippedJs() {
-  const out = [];
-  for await (const entry of glob('src/**/*.js', { cwd: REPO_ROOT })) {
-    const rel = entry.replace(/\\/g, '/');
-    // Skip vendored / minified third-party bundles.
-    if (rel.includes('/lib/') || rel.endsWith('.min.js')) continue;
-    out.push(rel);
-  }
-  return out;
-}
-
 test('every src/**/*.js file parses cleanly', async () => {
-  const files = await listShippedJs();
+  const files = await listShippedJs(REPO_ROOT);
   assert.ok(files.length > 0, 'found at least one source file');
 
   const failed = [];
