@@ -139,7 +139,17 @@ function resolveChanges(name, args, context, text) {
     const start = lineRange(text, startLine);
     const end = lineRange(text, endLine);
     if (!start || !end) return failure('INVALID_EDIT_RANGE', `Line ${!start ? startLine : endLine} is past the end of the document.`);
-    return { ok: true, changes: [{ from: start.from, to: end.to, insert: args.new_content }] };
+    let from = start.from;
+    let to = end.to;
+    if (args.new_content === '') {
+      const followingEnding = lineEndingLength(text, to);
+      if (followingEnding > 0) {
+        to += followingEnding;
+      } else if (from > 0) {
+        from -= precedingLineEndingLength(text, from);
+      }
+    }
+    return { ok: true, changes: [{ from, to, insert: args.new_content }] };
   }
 
   if (name === 'search_replace') {
@@ -322,7 +332,18 @@ function lineRange(text, targetLine) {
   }
   if (line !== targetLine) return null;
   const newline = text.indexOf('\n', from);
-  return { from, to: newline < 0 ? text.length : newline };
+  const to = newline < 0 ? text.length : newline > from && text.charCodeAt(newline - 1) === 13 ? newline - 1 : newline;
+  return { from, to };
+}
+
+function lineEndingLength(text, offset) {
+  if (text.slice(offset, offset + 2) === '\r\n') return 2;
+  return text.charCodeAt(offset) === 10 ? 1 : 0;
+}
+
+function precedingLineEndingLength(text, offset) {
+  if (text.charCodeAt(offset - 1) !== 10) return 0;
+  return offset > 1 && text.charCodeAt(offset - 2) === 13 ? 2 : 1;
 }
 
 export function editorFileLabel(value) {

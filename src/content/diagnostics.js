@@ -98,7 +98,7 @@
   /** Return true if `text` looks like it contains extra content beyond a
    *  "line N" badge (i.e. the ancestor is a plausible diagnostic row, not
    *  just the badge wrapper). */
-  function hasRoomForMessage(text, badgeText) {
+  function hasRoomForMessage(text) {
     if (!text) return false;
     const stripped = text.replace(/\(?\s*line\s+\d+\s*\)?/gi, '').trim();
     return stripped.length >= 4;
@@ -108,13 +108,12 @@
    *  rows (another "line N" reference, or section headers like Comments /
    *  Misspellings / compiler count). When that happens we've climbed past
    *  the individual row and should back off. */
-  function looksLikeMultipleRows(text, ownLineNum) {
+  function looksLikeMultipleRows(text) {
     if (!text) return false;
 
     let count = 0;
     const re = /\bline\s+(\d+)\b/gi;
-    let m;
-    while ((m = re.exec(text)) !== null) {
+    while (re.exec(text) !== null) {
       if (++count >= 2) return true;
     }
 
@@ -130,14 +129,14 @@
   /** Walk up from the badge one ancestor at a time and return the SMALLEST
    *  ancestor that contains the badge plus actual message text, without
    *  bleeding into neighbouring rows or sidebar sections. */
-  function findRowAncestor(badge, badgeText, lineNum, maxHops) {
+  function findRowAncestor(badge, maxHops) {
     let cur = badge.parentElement;
     let hops = 0;
     while (cur && hops < maxHops) {
       if (cur.tagName === 'ASIDE' || cur.tagName === 'MAIN' || cur.tagName === 'BODY') break;
       const t = fullText(cur);
-      if (looksLikeMultipleRows(t, lineNum)) break;
-      if (hasRoomForMessage(t, badgeText)) return cur;
+      if (looksLikeMultipleRows(t)) break;
+      if (hasRoomForMessage(t)) return cur;
       cur = cur.parentElement;
       hops++;
     }
@@ -340,7 +339,7 @@
       if (!info) continue;
       const { line: lineNum, severity: badgeSeverity } = info;
 
-      const row = findRowAncestor(badge, badgeText, lineNum, 8);
+      const row = findRowAncestor(badge, 8);
       if (!row || seenRows.has(row)) continue;
       seenRows.add(row);
 

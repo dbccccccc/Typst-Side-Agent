@@ -3,7 +3,7 @@ import {
   isReasoningEffortDefault, normalizeEditorApprovalMode
 } from '../shared/constants.js';
 import {
-  PROTOCOL, buildRequest, buildRunEvent, unwrapResponse, validateRunStartEnvelope
+  PROTOCOL, buildRequest, buildRunEvent, unwrapResponse, validateRunReserveEnvelope, validateRunStartEnvelope
 } from '../shared/protocol.js';
 import { createOperationSignal, isAbortError, raceWithSignal, throwIfAborted } from '../shared/abort.js';
 import { readResponseTextBounded } from '../shared/bounded-response.js';
@@ -20,7 +20,7 @@ import {
 import { buildToolRegistry } from './tool-registry.js';
 import { parseAndValidateToolArguments, parseToolArguments } from '../shared/tool-validation.js';
 import { createStreamBatcher } from './stream-batcher.js';
-import { extractReasoningChunk, splitInlineThink, streamProviderRound } from './provider.js';
+import { splitInlineThink, streamProviderRound } from './provider.js';
 import { editorFileLabel, isEditorEditTool, prepareEditorEdit } from './edit-preview.js';
 import { validateEndpointUrl } from '../shared/endpoint-policy.js';
 import { applyTextChanges, DEFAULT_EDIT_FILE_LABEL, sha256Text } from '../shared/edit-checkpoint.js';
@@ -30,6 +30,8 @@ import {
   sameActiveEditorFile
 } from '../shared/active-file.js';
 import { projectTreeFromContext } from '../shared/project-tree.js';
+import { createRunCoordinator } from './run-coordinator.js';
+import { planToolCallsForExecution } from './tool-execution-plan.js';
 
 export { extractReasoningChunk, splitInlineThink } from './provider.js';
 
@@ -37,6 +39,7 @@ const runs = new Map();
 const preflightWaiters = new Map();
 const approvalWaiters = new Map();
 let adapters = defaultAdapters();
+const runCoordinator = createRunCoordinator({ now: () => adapters.now() });
 
 function defaultAdapters() {
   return {
@@ -69,6 +72,7 @@ export function configureAgentAdapters(overrides = {}) {
 
 export function resetAgentAdapters() {
   configureAgentAdapters();
+  runCoordinator.reset();
 }
 
 export function getActiveRunIds() {
@@ -83,6 +87,23 @@ export function getActiveRunSummaries() {
     sessionId: run.sessionId,
     startedAt: run.startedAt
   }));
+}
+
+function runIdentity(message) {
+  return {
+    runId: message.runId,
+    tabId: message.payload.tabId,
+    projectId: message.payload.projectId,
+    sessionId: message.payload.sessionId
+  };
+}
+
+export function reserveRun(message) {
+  const checked = validateRunReserveEnvelope(message);
+  if (!checked.ok) throw coded(checked.error.code, checked.error.message);
+  const result = runCoordinator.reserve(runIdentity(message));
+  if (!result.ok) throw coded(result.code, result.error);
+  return result;
 }
 
 const TOOL_PREFLIGHT = Object.freeze({
@@ -596,15 +617,25 @@ async function executeReadFileStructure(run, call) {
   const collapsedFolders = projectTree.entries
     .filter(entry => entry.kind === 'folder' && entry.state === 'collapsed')
     .map(entry => entry.path);
+  const unknownEntries = projectTree.entries
+    .filter(entry => entry.kind === 'unknown')
+    .map(entry => entry.path)
+    .slice(0, 32);
+  const incomplete = projectTree.truncated || collapsedFolders.length > 0 || unknownEntries.length > 0;
   return {
     ok: true,
     entries: projectTree.entries,
     truncated: projectTree.truncated,
-    complete: !projectTree.truncated && collapsedFolders.length === 0,
+    complete: !incomplete,
     collapsed_folders: collapsedFolders,
-    note: collapsedFolders.length
-      ? 'Collapsed folder contents were not rendered and are unknown. Ask the user to expand them and call read_file_structure again if their children are needed.'
-      : 'Only names and rendered hierarchy were read; no file contents were accessed.'
+    unknown_entries: unknownEntries,
+    note: unknownEntries.length
+      ? 'Some rendered rows could not be classified as files or folders. Ask the user to identify or expand them, then call read_file_structure again.'
+      : collapsedFolders.length
+        ? 'Collapsed folder contents were not rendered and are unknown. Ask the user to expand them and call read_file_structure again if their children are needed.'
+        : projectTree.truncated
+          ? 'The rendered file tree exceeded the bounded entry limit. Narrow or expand the relevant area and call read_file_structure again.'
+          : 'Only names and rendered hierarchy were read; no file contents were accessed.'
   };
 }
 
@@ -694,7 +725,7 @@ async function prepareEditorTool(run, call, args) {
   return prepareEditorEdit(call.name, args, context);
 }
 
-function preparedEditorPayload(callId, prepared, includePreview = false) {
+function preparedEditorPayload(callId, prepared, options = {}) {
   const payload = {
     expectedText: prepared.baseText,
     expectedEditorToken: prepared.editorToken,
@@ -702,13 +733,14 @@ function preparedEditorPayload(callId, prepared, includePreview = false) {
     changes: prepared.changes,
     callId
   };
-  if (includePreview) payload.preview = prepared.preview;
+  if (options.includePreview) payload.preview = prepared.preview;
+  if (typeof options.reviewedDiff === 'boolean') payload.reviewedDiff = options.reviewedDiff;
   return payload;
 }
 
 async function showPreparedEditorPreview(run, call, prepared) {
   for (let attempt = 0; attempt < 16; attempt += 1) {
-    const response = await forwardToTab(run, PROTOCOL.PAGE_SHOW_EDIT_PREVIEW, preparedEditorPayload(call.id, prepared, true));
+    const response = await forwardToTab(run, PROTOCOL.PAGE_SHOW_EDIT_PREVIEW, preparedEditorPayload(call.id, prepared, { includePreview: true }));
     const result = response?.result || response || { ok: true, shown: false };
     if (result?.code !== 'STALE_EDIT_PREVIEW' || result?.staleReason !== 'file' || !run.activeEditorFile) return result;
     const fileReady = await waitForMessageFile(run, call);
@@ -726,7 +758,7 @@ async function clearPreparedEditorPreview(run, callId) {
   }
 }
 
-async function executePreparedEditorTool(run, call, prepared, fileRetryCount = 0) {
+async function executePreparedEditorTool(run, call, prepared, fileRetryCount = 0, reviewedDiff = false) {
   const callId = call.id;
   const proposedText = applyTextChanges(prepared.baseText, prepared.changes);
   const [baseHash, proposedHash] = await Promise.all([
@@ -782,7 +814,7 @@ async function executePreparedEditorTool(run, call, prepared, fileRetryCount = 0
   // Delivery failures are ambiguous: the page may have committed just before
   // the worker observed cancellation. In that case the thrown error leaves the
   // write-ahead record intact for hash-based recovery.
-  const response = await forwardToTab(run, PROTOCOL.PAGE_APPLY_EDIT, preparedEditorPayload(callId, prepared));
+  const response = await forwardToTab(run, PROTOCOL.PAGE_APPLY_EDIT, preparedEditorPayload(callId, prepared, { reviewedDiff }));
   const result = response?.result || response || { ok: false, error: 'No page response' };
 
   if (result.ok === false) {
@@ -793,7 +825,7 @@ async function executePreparedEditorTool(run, call, prepared, fileRetryCount = 0
       }
       const fileReady = await waitForMessageFile(run, call);
       if (!fileReady.ok) return preflightFailure(fileReady);
-      return executePreparedEditorTool(run, call, prepared, fileRetryCount + 1);
+      return executePreparedEditorTool(run, call, prepared, fileRetryCount + 1, reviewedDiff);
     }
     return result;
   }
@@ -895,23 +927,7 @@ async function discoverMcpToolset(run) {
   }));
 }
 
-export function sortToolCallsForExecution(toolCalls) {
-  return toolCalls.map((call, index) => ({ call, index })).sort((left, right) => {
-    const priority = call => {
-      if (call.name === 'read_file_structure') return 0;
-      if (call.name === 'open_project_file') return 1;
-      if (call.name === 'read_diagnostics') return 3;
-      return 2;
-    };
-    const priorityDifference = priority(left.call) - priority(right.call);
-    if (priorityDifference) return priorityDifference;
-    const aArgs = left.call.parsedArgs || parseToolArguments(left.call.rawArgs || '').value || {};
-    const bArgs = right.call.parsedArgs || parseToolArguments(right.call.rawArgs || '').value || {};
-    const aLine = left.call.name === 'replace_lines' ? Number(aArgs.start_line || 0) : 0;
-    const bLine = right.call.name === 'replace_lines' ? Number(bArgs.start_line || 0) : 0;
-    return bLine - aLine || left.index - right.index;
-  }).map(item => item.call);
-}
+export const sortToolCallsForExecution = planToolCallsForExecution;
 
 function attachReasoningContentToAssistantTurn(message, reasoning, modelConfig) {
   if (typeof reasoning === 'string' && reasoning) message.reasoning_content = reasoning;
@@ -922,8 +938,17 @@ export async function handleStreamStart(message) {
   const checked = validateRunStartEnvelope(message);
   if (!checked.ok) throw coded(checked.error.code, checked.error.message);
   const { runId } = message;
-  if (runs.has(runId)) throw coded('DUPLICATE_RUN_ID', `Run ${runId} is already active.`);
   const payload = message.payload;
+  const admission = runCoordinator.admit(runIdentity(message));
+  if (!admission.ok) {
+    if (admission.code === 'CANCELLED') {
+      adapters.runtimeSend(buildRunEvent(PROTOCOL.AI_STREAM_CANCELLED, runId, {
+        code: 'CANCELLED', message: 'Run cancelled.'
+      }));
+      return { ok: true, cancelled: true, runId };
+    }
+    throw coded(admission.code, admission.error);
+  }
   const controller = new AbortController();
   const run = {
     runId,
@@ -1075,6 +1100,7 @@ export async function handleStreamStart(message) {
     run.batcher.cancel();
     cleanupRunWaiters(runId);
     if (runs.get(runId) === run) runs.delete(runId);
+    runCoordinator.complete(runId);
   }
 }
 
@@ -1126,7 +1152,7 @@ async function executeToolDispatch(run, call, routes) {
       if (!await revalidateOriginatingTab(run)) return { ok: false, code: 'STALE_RUN_TAB', error: 'The originating Typst tab navigated while the edit was awaiting approval.' };
       const fileReady = await waitForMessageFile(run, call);
       if (!fileReady.ok) return preflightFailure(fileReady);
-      return await executePreparedEditorTool(run, call, prepared);
+      return await executePreparedEditorTool(run, call, prepared, 0, true);
     } finally {
       await clearPreparedEditorPreview(run, call.id);
     }
@@ -1146,8 +1172,9 @@ async function executeToolDispatch(run, call, routes) {
 }
 
 export function abortRun(runId) {
+  const ownership = runCoordinator.cancel(runId);
   const run = runs.get(runId);
-  if (!run) return { ok: true, found: false, terminal: true };
+  if (!run) return { ok: true, found: ownership.found, terminal: true };
   if (!run.signal.aborted) run.controller.abort(new DOMException('Cancelled by user', 'AbortError'));
   cleanupRunWaiters(runId, 'deny');
   return { ok: true, found: true, terminal: false };

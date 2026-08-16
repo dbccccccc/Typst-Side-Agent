@@ -39,6 +39,7 @@ export const PROTOCOL = Object.freeze({
   GENERATE_SESSION_TITLE: 'GENERATE_SESSION_TITLE',
 
   AI_STREAM_START: 'AI_STREAM_START',
+  AI_RUN_RESERVE: 'AI_RUN_RESERVE',
   AI_STREAM_CANCEL: 'AI_STREAM_CANCEL',
   AI_RUN_STATUS: 'AI_RUN_STATUS',
   AI_STREAM_BATCH: 'AI_STREAM_BATCH',
@@ -74,8 +75,8 @@ export const PROTOCOL = Object.freeze({
 
 const RUN_TYPES = new Set([
   PROTOCOL.AI_STREAM_START,
+  PROTOCOL.AI_RUN_RESERVE,
   PROTOCOL.AI_STREAM_CANCEL,
-  PROTOCOL.AI_RUN_STATUS,
   PROTOCOL.AI_STREAM_BATCH,
   PROTOCOL.AI_STREAM_DONE,
   PROTOCOL.AI_STREAM_CANCELLED,
@@ -124,7 +125,9 @@ const REQUEST_TYPES = new Set([
   PROTOCOL.GET_DIAGNOSTICS,
   PROTOCOL.GENERATE_SESSION_TITLE,
   PROTOCOL.AI_STREAM_START,
+  PROTOCOL.AI_RUN_RESERVE,
   PROTOCOL.AI_STREAM_CANCEL,
+  PROTOCOL.AI_RUN_STATUS,
   PROTOCOL.AI_TOOL_PREFLIGHT_RESOLVE,
   PROTOCOL.AI_TOOL_APPROVAL_RESOLVE,
   PROTOCOL.QUICK_ATTACH_SELECTION,
@@ -402,6 +405,12 @@ export function validateMessagePayload(type, payload) {
       if ((payload.settings != null && !isRecord(payload.settings)) || (payload.modelConfig != null && !isRecord(payload.modelConfig)) || (payload.attachments != null && !isRecord(payload.attachments))) return invalid('INVALID_RUN_START', 'Run settings, modelConfig, and attachments must be objects', '$.payload');
       if (payload.activeEditorFile != null && !validActiveEditorFile(payload.activeEditorFile)) return invalid('INVALID_ACTIVE_EDITOR_FILE', 'activeEditorFile is invalid', '$.payload.activeEditorFile');
       return checked;
+    case PROTOCOL.AI_RUN_RESERVE:
+      checked = exactFields(payload, ['tabId', 'projectId', 'sessionId'], ['tabId', 'projectId', 'sessionId']);
+      if (!checked.ok) return checked;
+      if (!Number.isInteger(payload.tabId) || payload.tabId < 0) return invalid('INVALID_TAB_ID', 'tabId must be a non-negative integer', '$.payload.tabId');
+      if (!nonEmpty(payload.projectId)) return invalid('INVALID_PROJECT_ID', 'projectId is required', '$.payload.projectId');
+      return nonEmpty(payload.sessionId) ? checked : invalid('INVALID_SESSION_ID', 'sessionId is required', '$.payload.sessionId');
     case PROTOCOL.AI_RUN_STATUS:
       checked = exactFields(payload, ['projectId', 'sessionId'], ['projectId', 'sessionId']);
       if (!checked.ok) return checked;
@@ -461,9 +470,9 @@ export function validateMessagePayload(type, payload) {
         ? checked
         : invalid('INVALID_PREPARED_EDIT', 'Prepared edit preview request is invalid', '$.payload');
     case PROTOCOL.PAGE_APPLY_EDIT:
-      checked = exactFields(payload, ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId'], ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId']);
+      checked = exactFields(payload, ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'reviewedDiff'], ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'reviewedDiff']);
       if (!checked.ok) return checked;
-      return typeof payload.expectedText === 'string' && payload.expectedText.length <= 1_000_000 && nonEmpty(payload.expectedEditorToken) && payload.expectedEditorToken.length <= 200 && nonEmpty(payload.expectedFileLabel) && payload.expectedFileLabel.length <= 240 && validPreparedChanges(payload.changes, payload.expectedText.length) && nonEmpty(payload.callId)
+      return typeof payload.expectedText === 'string' && payload.expectedText.length <= 1_000_000 && nonEmpty(payload.expectedEditorToken) && payload.expectedEditorToken.length <= 200 && nonEmpty(payload.expectedFileLabel) && payload.expectedFileLabel.length <= 240 && validPreparedChanges(payload.changes, payload.expectedText.length) && nonEmpty(payload.callId) && typeof payload.reviewedDiff === 'boolean'
         ? checked
         : invalid('INVALID_PREPARED_EDIT', 'Prepared edit request is invalid', '$.payload');
     case PROTOCOL.PAGE_CLEAR_EDIT_PREVIEW:
@@ -490,6 +499,10 @@ export function validateRunStartEnvelope(message) {
   if (!nonEmpty(p.sessionId)) return invalid('INVALID_SESSION_ID', 'sessionId is required');
   if (!Array.isArray(p.messages)) return invalid('INVALID_MESSAGES', 'messages must be an array');
   return base;
+}
+
+export function validateRunReserveEnvelope(message) {
+  return validateEnvelope(message, { expectedType: PROTOCOL.AI_RUN_RESERVE });
 }
 
 export function validateRunCancelEnvelope(message) {

@@ -623,14 +623,14 @@
   }
 
   /** Apply only the exact change set the user reviewed against the exact source they saw. */
-  function applyPreparedEdit(runId, callId, expectedText, expectedEditorToken, expectedFileLabel, changes) {
+  function applyPreparedEdit(runId, callId, expectedText, expectedEditorToken, expectedFileLabel, changes, reviewedDiff) {
     if (activeEditPreview && (activeEditPreview.runId !== runId || activeEditPreview.callId !== callId)) {
       return { ok: false, code: 'EDIT_PREVIEW_BUSY', error: 'Another run owns the active inline editor preview.' };
     }
     const checked = validatePreparedEditSnapshot(expectedText, expectedEditorToken, expectedFileLabel, changes);
     if (!checked.ok) return checked;
     checked.view.dispatch({ changes: checked.changes });
-    return { ok: true, edits_applied: checked.changes.length, reviewed_diff: true };
+    return { ok: true, edits_applied: checked.changes.length, reviewed_diff: reviewedDiff === true };
   }
 
   // ---------- Preview capture ----------
@@ -1098,6 +1098,7 @@
     globalThis.__typstAgentFloatController = factory({
       document,
       window,
+      filesRoot: () => globalThis.__typstAgentFindFilesPanelRoot?.(document) || null,
       onFlush(flags) {
         if (flags.has('workspace')) workspaceCache = undefined;
         if (flags.has('workspace') || flags.has('preview')) dominantImageCache = undefined;
@@ -1192,7 +1193,7 @@
           result = { result: clearPreparedEditPreview(request.runId, request.payload.callId) };
           break;
         case TYPES.PAGE_APPLY_EDIT:
-          result = { result: applyPreparedEdit(request.runId, request.payload.callId, request.payload.expectedText, request.payload.expectedEditorToken, request.payload.expectedFileLabel, request.payload.changes) };
+          result = { result: applyPreparedEdit(request.runId, request.payload.callId, request.payload.expectedText, request.payload.expectedEditorToken, request.payload.expectedFileLabel, request.payload.changes, request.payload.reviewedDiff) };
           if (result.result.ok) clearPreparedEditPreview(request.runId, request.payload.callId);
           break;
         default: return;

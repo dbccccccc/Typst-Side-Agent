@@ -1,7 +1,7 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  abortRun, configureAgentAdapters, generateSessionTitle, getActiveRunIds, handleStreamStart,
+  abortRun, configureAgentAdapters, generateSessionTitle, getActiveRunIds, handleStreamStart, reserveRun,
   resetAgentAdapters, resolveApproval, resolvePreflight
 } from '../src/background/agent.js';
 import { PROTOCOL, buildRequest, successResponse } from '../src/shared/protocol.js';
@@ -130,7 +130,7 @@ test('a provider cannot reuse a tool-call id in a later round', async () => {
 });
 
 function startMessage(runId, overrides = {}) {
-  return buildRequest(PROTOCOL.AI_STREAM_START, {
+  const payload = {
     tabId: overrides.tabId ?? 17,
     projectId: overrides.projectId || 'project-a',
     sessionId: overrides.sessionId || 'session-a',
@@ -139,7 +139,13 @@ function startMessage(runId, overrides = {}) {
     modelConfig: overrides.modelConfig || { apiBaseUrl: 'https://model.example/v1', apiKey: 'fixture-key', modelId: runId },
     attachments: overrides.attachments || {},
     ...(overrides.activeEditorFile ? { activeEditorFile: overrides.activeEditorFile } : {})
-  }, { requestId: `request-${runId}`, runId });
+  };
+  reserveRun(buildRequest(PROTOCOL.AI_RUN_RESERVE, {
+    tabId: payload.tabId,
+    projectId: payload.projectId,
+    sessionId: payload.sessionId
+  }, { requestId: `reserve-${runId}`, runId }));
+  return buildRequest(PROTOCOL.AI_STREAM_START, payload, { requestId: `request-${runId}`, runId });
 }
 
 function textStream(text) {
@@ -249,6 +255,7 @@ test('read_file_structure waits for the Files sidebar and returns only its visib
       { path: '123', kind: 'folder', state: 'expanded' },
       { path: '123/not opened folder', kind: 'folder', state: 'collapsed' },
       { path: '123/456.typ', kind: 'file' },
+      { path: 'mystery-row', kind: 'unknown' },
       { path: 'main.typ', kind: 'file' }
     ],
     truncated: false
@@ -298,6 +305,8 @@ test('read_file_structure waits for the Files sidebar and returns only its visib
   assert.equal(treeResult.ok, true);
   assert.equal(treeResult.complete, false);
   assert.deepEqual(treeResult.collapsed_folders, ['123/not opened folder']);
+  assert.deepEqual(treeResult.unknown_entries, ['mystery-row']);
+  assert.match(treeResult.note, /could not be classified/i);
   assert.ok(treeResult.entries.some(entry => entry.path === '123/456.typ'));
   assert.match(JSON.stringify(providerBodies[1]), /123\/456\.typ/);
   assert.equal(events.filter(event => event.type === PROTOCOL.AI_TOOL_PREFLIGHT_WAITING).length, 1);
@@ -589,6 +598,7 @@ test('editor mutation waits for exact-run approval and targets the captured tab'
         assert.equal(message.payload.expectedEditorToken, 'editor-1');
         assert.equal(message.payload.expectedFileLabel, 'main.typ');
         assert.deepEqual(message.payload.changes, [{ from: 0, to: 5, insert: '= Fixed' }]);
+        assert.equal(message.payload.reviewedDiff, true);
         return successResponse(message.requestId, { result: { ok: true, edits_applied: 1, reviewed_diff: true } }, message.runId);
       }
       if (message.type === PROTOCOL.PAGE_CLEAR_EDIT_PREVIEW) {
@@ -655,6 +665,7 @@ test('auto-approved editor mode applies atomically without opening a review gate
         assert.equal(message.payload.expectedEditorToken, 'editor-auto');
         assert.equal(message.payload.expectedFileLabel, 'Current Typst document');
         assert.deepEqual(message.payload.changes, [{ from: 0, to: 5, insert: '= Auto' }]);
+        assert.equal(message.payload.reviewedDiff, false);
         return successResponse(message.requestId, { result: { ok: true, edits_applied: 1 } }, message.runId);
       }
       throw new Error(`Unexpected page request ${message.type}`);
@@ -897,6 +908,27 @@ test('cancelling one run during discovery does not cancel another run', async ()
   assert.ok(events.some(event => event.runId === 'run-a' && event.type === PROTOCOL.AI_STREAM_CANCELLED));
   assert.ok(events.some(event => event.runId === 'run-b' && event.type === PROTOCOL.AI_STREAM_DONE));
   assert.equal(abortRun('stale-run').found, false);
+});
+
+test('cancellation after reservation prevents all run discovery and provider effects', async () => {
+  let tabs = 0;
+  let providers = 0;
+  let customTools = 0;
+  let mcpServers = 0;
+  const events = [];
+  configureAgentAdapters({
+    runtimeSend: message => events.push(message),
+    tabsGet: async () => { tabs += 1; return { id: 1, url: 'https://typst.app/project/project-a' }; },
+    loadCustomTools: async () => { customTools += 1; return []; },
+    loadMcpServers: async () => { mcpServers += 1; return []; },
+    fetchImpl: async () => { providers += 1; return textStream('unexpected'); }
+  });
+  const message = startMessage('run-cancel-before-start');
+  assert.equal(abortRun(message.runId).found, true);
+  const result = await handleStreamStart(message);
+  assert.equal(result.cancelled, true);
+  assert.deepEqual({ tabs, providers, customTools, mcpServers }, { tabs: 0, providers: 0, customTools: 0, mcpServers: 0 });
+  assert.equal(events.filter(event => event.type === PROTOCOL.AI_STREAM_CANCELLED).length, 1);
 });
 
 test('originating tab is revalidated and errors without contacting provider after navigation', async () => {

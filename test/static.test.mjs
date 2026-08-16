@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listShippedJs } from '../scripts/list-shipped-js.mjs';
 import { MAIN_WORLD_FILES } from '../src/background/content-bootstrap.js';
+import { marked } from 'marked';
 
 const execFile = promisify(execFileCb);
 const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -61,9 +62,19 @@ test('workflows pin actions, declare least privilege, and use canonical packagin
   }
   assert.match(ci, /npm run verify/);
   assert.match(ci, /npm run test:browser/);
+  assert.match(ci, /node-version: \['22\.13\.0', '24'\]/);
+  assert.equal((ci.match(/npm run test:browser/g) || []).length, 2);
+  assert.match(ci, /npx --no-install playwright-core install --with-deps chromium/);
+  assert.match(ci, /npm run audit:release/);
   assert.match(release, /environment:\s*chrome-web-store/);
   assert.match(release, /--expected-tag/);
   assert.match(release, /npm run test:browser/);
+  assert.equal((release.match(/npm run test:browser/g) || []).length, 2);
+  assert.match(release, /npx --no-install playwright-core install --with-deps chromium/);
+  assert.match(release, /npm run audit:release/);
+  assert.match(release, /RELEASE_TAG:\s*\$\{\{ github\.event\.release\.tag_name \}\}/);
+  assert.doesNotMatch(release, /run:\s*[^\n]*\$\{\{\s*github\.event\.release\.tag_name/);
+  for (const source of [ci, release]) assert.doesNotMatch(source, /npx\s+playwright\b/);
   assert.match(release, /npm run package:check/);
   assert.match(release, /publish:\s*[\s\S]*needs:\s*build[\s\S]*environment:\s*chrome-web-store/);
   assert.ok(release.indexOf('npm run verify') < release.indexOf('environment: chrome-web-store'));
@@ -78,8 +89,32 @@ test('manifest and package versions are exactly equal', async () => {
 test('documented Node floor matches the pinned verification toolchain', async () => {
   const pkg = JSON.parse(await readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'));
   const lock = JSON.parse(await readFile(path.join(REPO_ROOT, 'package-lock.json'), 'utf8'));
-  assert.equal(pkg.engines.node, '>=20.19.0');
+  assert.equal(pkg.engines.node, '>=22.13.0');
   assert.equal(lock.packages[''].engines.node, pkg.engines.node);
+});
+
+test('public release documents track the current package and private reporting route', async () => {
+  const [changelog, security, privacy, readme] = await Promise.all([
+    readFile(path.join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'),
+    readFile(path.join(REPO_ROOT, 'SECURITY.md'), 'utf8'),
+    readFile(path.join(REPO_ROOT, 'PRIVACY.md'), 'utf8'),
+    readFile(path.join(REPO_ROOT, 'README.md'), 'utf8')
+  ]);
+  assert.match(changelog, new RegExp(`^## \\[${manifest.version.replaceAll('.', '\\.') }\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm'));
+  assert.match(security, /security\/advisories\/new/);
+  assert.match(privacy, /\[SECURITY\.md\]\(\.\/SECURITY\.md\)/);
+  for (const document of ['CHANGELOG.md', 'CONTRIBUTING.md', 'ROADMAP.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md']) {
+    assert.match(readme, new RegExp(`\\[${document.replace('.', '\\.')}\\]\\(\\.\\/${document.replace('.', '\\.')}\\)`));
+  }
+});
+
+test('release checklist renders all nine ordered steps', async () => {
+  const testing = await readFile(path.join(REPO_ROOT, 'TESTING.md'), 'utf8');
+  const section = testing.slice(testing.indexOf('## Release checklist'), testing.indexOf('All GitHub Actions'));
+  const html = marked.parse(section);
+  assert.equal((html.match(/<li>/g) || []).length, 9);
+  assert.match(html, /npm run audit:release/);
+  assert.doesNotMatch(html, /<pre><code[^>]*>[^<]*5\. Confirm/s);
 });
 
 test('content bridge adapter loads before isolated code and exposes all main-world assets', () => {

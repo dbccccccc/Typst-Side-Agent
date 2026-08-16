@@ -1,4 +1,4 @@
-// List shipped extension JS under src/ (Node 20+). Skips lib/ and *.min.js.
+// List shipped extension JS under src/ (Node 22.13+). Skips lib/ and *.min.js.
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

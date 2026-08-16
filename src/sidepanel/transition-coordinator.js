@@ -7,17 +7,45 @@ export function createTransitionCoordinator() {
   return Object.freeze({
     beginSend(identity) {
       if (activeSend) return null;
-      activeSend = Object.freeze({ ...identity });
-      return activeSend;
+      const token = Object.freeze({ ...identity });
+      activeSend = { token, phase: 'preparing', runId: null, cancelled: false };
+      return token;
     },
     isSendCurrent(token, identity) {
-      return activeSend === token
+      return activeSend?.token === token
+        && !activeSend.cancelled
         && token?.projectId === identity?.projectId
         && token?.sessionId === identity?.sessionId
         && token?.history === identity?.history;
     },
+    markReserved(token, runId) {
+      if (activeSend?.token !== token || activeSend.cancelled || activeSend.phase !== 'preparing') return false;
+      activeSend.runId = runId;
+      activeSend.phase = 'reserved';
+      return true;
+    },
+    markStarting(token) {
+      if (activeSend?.token !== token || activeSend.cancelled || activeSend.phase !== 'reserved') return false;
+      activeSend.phase = 'starting';
+      return true;
+    },
+    canDispatch(token) {
+      return activeSend?.token === token && !activeSend.cancelled && activeSend.phase === 'reserved';
+    },
+    cancelRun(runId) {
+      if (!activeSend || activeSend.runId !== runId) return false;
+      activeSend.cancelled = true;
+      activeSend.phase = 'cancelled';
+      return true;
+    },
+    cancelSend(token) {
+      if (activeSend?.token !== token) return false;
+      activeSend.cancelled = true;
+      activeSend.phase = 'cancelled';
+      return true;
+    },
     endSend(token) {
-      if (activeSend !== token) return false;
+      if (activeSend?.token !== token) return false;
       activeSend = null;
       return true;
     },

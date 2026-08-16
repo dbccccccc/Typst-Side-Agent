@@ -61,6 +61,34 @@ test('replace_lines resolves an absolute change and a unified diff', () => {
   ]);
 });
 
+test('empty replace_lines deletes exact physical line ranges at every boundary', () => {
+  for (const [before, startLine, endLine, expected] of [
+    ['a\nb\nc', 1, 1, 'b\nc'],
+    ['a\nb\nc', 2, 2, 'a\nc'],
+    ['a\nb\nc', 3, 3, 'a\nb'],
+    ['a\nb\nc\nd', 2, 3, 'a\nd'],
+    ['only', 1, 1, ''],
+    ['a\n', 2, 2, 'a'],
+    ['a\r\nb\r\nc', 2, 2, 'a\r\nc']
+  ]) {
+    const prepared = prepareEditorEdit('replace_lines', {
+      start_line: startLine,
+      end_line: endLine,
+      new_content: ''
+    }, context(before));
+    assert.equal(prepared.ok, true, `${JSON.stringify(before)} ${startLine}-${endLine}`);
+    assert.equal(apply(before, prepared.changes), expected, `${JSON.stringify(before)} ${startLine}-${endLine}`);
+  }
+});
+
+test('non-empty CRLF line replacement preserves the original line ending', () => {
+  const before = 'a\r\nb\r\nc';
+  const prepared = prepareEditorEdit('replace_lines', {
+    start_line: 2, end_line: 2, new_content: 'B'
+  }, context(before));
+  assert.equal(apply(before, prepared.changes), 'a\r\nB\r\nc');
+});
+
 test('search, patch, cursor, and selection edits use the captured snapshot', () => {
   const before = 'alpha\nbeta\ngamma';
   const search = prepareEditorEdit('search_replace', { search: 'beta', replace: 'BETA' }, context(before));

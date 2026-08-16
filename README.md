@@ -46,7 +46,7 @@ trust boundaries, storage ownership, and extension points. See
 
 ## Development install
 
-Requirements: Chrome or Edge with Manifest V3 support, Node.js 20.19 or newer, and
+Requirements: Chromium with Manifest V3 support, Node.js 22.13 or newer, and
 npm.
 
 ```bash
@@ -130,10 +130,12 @@ be produced, history shows an omission marker.
 
 | Tool | Effect | Approval |
 |---|---|---|
+| `read_file_structure` | Read the bounded rendered Files hierarchy; unknown, collapsed, or truncated rows keep the result incomplete. | Automatic |
+| `open_project_file` | Ask the user to open an exact visible project file, then retarget later document operations. | Automatic |
 | `read_document` | Read fresh editor source with numbered lines and bounded paging. | Automatic |
 | `read_diagnostics` | Wait a fixed 750 ms, then read fresh Typst and spelling diagnostics. Takes no parameters. | Automatic |
 | `read_typst_docs` | Read bundled Typst reference pages. | Automatic |
-| `replace_lines` | Replace an inclusive line range. | Ask: review diff; Auto approve: atomic apply |
+| `replace_lines` | Replace an inclusive line range; empty content deletes the physical range and one boundary newline. | Ask: review diff; Auto approve: atomic apply |
 | `search_replace` | Replace one exact substring. | Ask: review diff; Auto approve: atomic apply |
 | `patch_document` | Apply coordinated, non-overlapping edits atomically. | Ask: review combined diff; Auto approve: atomic apply |
 | `insert_at_cursor` | Insert text at the captured caret. | Ask: review diff; Auto approve: atomic apply |
@@ -141,7 +143,8 @@ be produced, history shows an omission marker.
 
 Tool-call JSON is parsed fail-closed and validated again immediately before
 dispatch. Invalid or oversized arguments become structured errors and never
-reach the editor or a network endpoint.
+reach the editor or a network endpoint. Stateful calls retain provider order;
+only adjacent `replace_lines` calls are safely applied bottom-to-top.
 
 The **Editor edits** setting is stored locally and captured when Send is
 pressed. Unknown or legacy values fall back to **Ask**. In Ask mode, the worker
@@ -298,6 +301,8 @@ src/shared/protocol.js            message registry, envelopes, validators
 src/shared/abort.js               cancellation and timeout helpers
 src/background/service-worker.js  tab lifecycle and request router
 src/background/agent.js           per-run orchestration and approvals
+src/background/run-coordinator.js bounded run admission, ownership, and tombstones
+src/background/tool-execution-plan.js dependency-preserving tool-call planning
 src/background/edit-preview.js    immutable edit resolution and unified hunks
 src/background/edit-revert.js     scoped hash-guarded checkpoint recovery
 src/background/document-snapshots.js scoped list/preview/restore/delete recovery
@@ -328,4 +333,11 @@ The renderer bundles are checked in with exact provenance under
 with `npm run vendor:verify`.
 
 See [TESTING.md](./TESTING.md) for focused commands, manual QA, and the complete
-release checklist. License: [MIT](./LICENSE).
+release checklist. Before contributing, read [CONTRIBUTING.md](./CONTRIBUTING.md);
+report vulnerabilities through [SECURITY.md](./SECURITY.md), never a public bug
+report. Release history and future maintenance directions live in
+[CHANGELOG.md](./CHANGELOG.md) and [ROADMAP.md](./ROADMAP.md).
+
+Typst Side Agent is licensed under [MIT](./LICENSE). Shipped renderer-library
+attributions and exact license locations are recorded in
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

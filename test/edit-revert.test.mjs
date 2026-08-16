@@ -59,6 +59,7 @@ function revertFixture(initialRecord, initialText, fixtureOptions = {}) {
         assert.equal(payload.expectedText, text);
         assert.equal(payload.expectedEditorToken, 'editor-fixture');
         assert.equal(payload.expectedFileLabel, 'main.typ');
+        assert.equal(payload.reviewedDiff, false);
         text = applyTextChanges(text, payload.changes);
         return { result: { ok: true, edits_applied: 1 } };
       }

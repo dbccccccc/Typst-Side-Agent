@@ -122,7 +122,8 @@ async function revertSingleCheckpoint(adapters, initialCheckpoint, payload) {
       expectedEditorToken: context.editorToken,
       expectedFileLabel: checkpoint.fileLabel,
       changes: [{ from: 0, to: context.fullText.length, insert: checkpoint.beforeText }],
-      callId: `revert-${checkpoint.id}`
+      callId: `revert-${checkpoint.id}`,
+      reviewedDiff: false
     }, { runId });
     const result = response?.result || response;
     if (result?.ok !== true) {

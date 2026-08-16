@@ -67,18 +67,80 @@
     const Observer = options.MutationObserver || win.MutationObserver;
     const observers = [];
     if (Observer) {
+      const FILES_SELECTOR = 'aside[aria-label*="Files" i], [role="region"][aria-label*="Files" i], [role="tree"]';
+      const PREVIEW_SELECTOR = 'canvas, img, [data-typst-preview], [data-testid*="preview" i]';
+      let surfaceObservers = [];
+
+      const inEditor = node => !!node?.closest?.('.cm-editor');
+      const filesRoot = () => {
+        if (typeof options.filesRoot === 'function') return options.filesRoot();
+        if (options.filesRoot) return options.filesRoot;
+        return doc.querySelector(FILES_SELECTOR);
+      };
+      const previewRoots = () => {
+        const configured = typeof options.previewRoots === 'function' ? options.previewRoots() : options.previewRoots;
+        const candidates = configured
+          ? Array.from(configured)
+          : Array.from(doc.querySelectorAll?.(PREVIEW_SELECTOR) || []);
+        return candidates.filter((node, index) =>
+          node && candidates.indexOf(node) === index && !inEditor(node) && !node.closest?.(FILES_SELECTOR)
+        );
+      };
+      const touchesSurface = node => {
+        if (!node || inEditor(node)) return false;
+        return !!node.matches?.(`${FILES_SELECTOR}, ${PREVIEW_SELECTOR}`)
+          || !!node.querySelector?.(`${FILES_SELECTOR}, ${PREVIEW_SELECTOR}`);
+      };
+
+      function bindSurfaceObservers() {
+        surfaceObservers.forEach(observer => observer.disconnect());
+        surfaceObservers = [];
+        const files = filesRoot();
+        if (files && !inEditor(files)) {
+          const filesObserver = new Observer(records => {
+            if (records.some(record => !inEditor(record.target))) invalidateAfterBurst('workspace');
+          });
+          filesObserver.observe(files, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'aria-selected', 'aria-expanded']
+          });
+          surfaceObservers.push(filesObserver);
+        }
+        const previews = previewRoots();
+        if (previews.length) {
+          const previewObserver = new Observer(records => {
+            if (records.some(record => !inEditor(record.target))) invalidateAfterBurst('preview');
+          });
+          for (const preview of previews) {
+            previewObserver.observe(preview, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['src', 'class', 'aria-selected']
+            });
+          }
+          surfaceObservers.push(previewObserver);
+        }
+      }
+
       const shell = doc.body || doc.documentElement;
       if (shell) {
-        const rootObserver = new Observer(() => invalidateAfterBurst('preview', 'workspace', 'layout'));
-        rootObserver.observe(shell, { childList: true });
+        const rootObserver = new Observer(records => {
+          const surfaceChanged = records.some(record =>
+            !inEditor(record.target)
+            && [...(record.addedNodes || []), ...(record.removedNodes || [])].some(touchesSurface)
+          );
+          if (!surfaceChanged) return;
+          bindSurfaceObservers();
+          invalidateAfterBurst('preview', 'workspace', 'layout');
+        });
+        rootObserver.observe(shell, { childList: true, subtree: true });
         observers.push(rootObserver);
       }
-      const previewRoot = options.previewRoot || doc.querySelector('main, [role="main"]');
-      if (previewRoot) {
-        const previewObserver = new Observer(() => invalidateAfterBurst('preview', 'workspace'));
-        previewObserver.observe(previewRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class', 'aria-selected'] });
-        observers.push(previewObserver);
-      }
+      bindSurfaceObservers();
+      observers.push({ disconnect() { surfaceObservers.forEach(observer => observer.disconnect()); } });
     }
 
     invalidate('selection', 'preview', 'workspace', 'layout');

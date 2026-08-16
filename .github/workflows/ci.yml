@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ['20.19.0', '22']
+        node-version: ['22.13.0', '24']
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -25,11 +25,16 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm run audit:release
       - run: npm run verify
       - name: Install browser smoke dependencies
-        if: ${{ matrix.node-version == '22' }}
-        run: npx playwright install --with-deps chromium
-      - if: ${{ matrix.node-version == '22' }}
+        if: ${{ matrix.node-version == '24' }}
+        run: npx --no-install playwright-core install --with-deps chromium
+      - name: Browser smoke (first pass)
+        if: ${{ matrix.node-version == '24' }}
+        run: npm run test:browser
+      - name: Browser smoke (second pass)
+        if: ${{ matrix.node-version == '24' }}
         run: npm run test:browser
 
   package:
@@ -40,7 +45,9 @@ jobs:
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '22'
+          node-version: '24'
+
+      - run: npm ci
 
       - name: Build unpacked extension zip
         run: npm run package && npm run package:check

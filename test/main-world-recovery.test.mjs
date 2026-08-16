@@ -266,7 +266,7 @@ test('isolated bridge cancels a queued edit before MAIN readiness', () => {
   const apply = bridge.envelope(bridge.TYPES.PAGE_APPLY_EDIT, {
     expectedText: 'old', expectedEditorToken: 'editor-1',
     expectedFileLabel: 'Current Typst document',
-    changes: [{ from: 0, to: 3, insert: 'new' }], callId: 'call-1'
+    changes: [{ from: 0, to: 3, insert: 'new' }], callId: 'call-1', reviewedDiff: false
   }, { requestId: 'apply-1', runId: 'run-1' });
   assert.equal(runtimeListener(apply, {}, response => { applyResponse = response; }), true);
 
@@ -352,7 +352,8 @@ test('reviewed edit commit is atomic and rejects stale document or file identity
     expectedEditorToken: editorToken,
     expectedFileLabel: 'main.typ',
     changes: [{ from: 0, to: 5, insert: '= Fixed' }],
-    callId: 'call-stale'
+    callId: 'call-stale',
+    reviewedDiff: true
   }, { requestId: 'stale', runId: 'run', nonce: 'nonce' }));
   assert.equal(page.posts.find(message => message.requestId === 'stale').payload.data.result.code, 'STALE_EDIT_PREVIEW');
   assert.equal(page.posts.find(message => message.requestId === 'stale').payload.data.result.staleReason, 'document');
@@ -363,7 +364,8 @@ test('reviewed edit commit is atomic and rejects stale document or file identity
     expectedEditorToken: 'another-editor',
     expectedFileLabel: 'main.typ',
     changes: [{ from: 0, to: 5, insert: '= Wrong' }],
-    callId: 'call-wrong-editor'
+    callId: 'call-wrong-editor',
+    reviewedDiff: true
   }, { requestId: 'wrong-editor', runId: 'run', nonce: 'nonce' }));
   assert.equal(page.posts.find(message => message.requestId === 'wrong-editor').payload.data.result.code, 'STALE_EDIT_PREVIEW');
   assert.equal(page.posts.find(message => message.requestId === 'wrong-editor').payload.data.result.staleReason, 'editor');
@@ -374,7 +376,8 @@ test('reviewed edit commit is atomic and rejects stale document or file identity
     expectedEditorToken: editorToken,
     expectedFileLabel: 'other.typ',
     changes: [{ from: 0, to: 5, insert: '= Wrong file' }],
-    callId: 'call-wrong-file'
+    callId: 'call-wrong-file',
+    reviewedDiff: true
   }, { requestId: 'wrong-file', runId: 'run', nonce: 'nonce' }));
   assert.equal(page.posts.find(message => message.requestId === 'wrong-file').payload.data.result.code, 'STALE_EDIT_PREVIEW');
   assert.equal(page.posts.find(message => message.requestId === 'wrong-file').payload.data.result.staleReason, 'file');
@@ -385,10 +388,22 @@ test('reviewed edit commit is atomic and rejects stale document or file identity
     expectedEditorToken: editorToken,
     expectedFileLabel: 'main.typ',
     changes: [{ from: 0, to: 5, insert: '= Fixed' }],
-    callId: 'call-apply'
+    callId: 'call-apply',
+    reviewedDiff: true
   }, { requestId: 'apply', runId: 'run', nonce: 'nonce' }));
   assert.equal(page.posts.find(message => message.requestId === 'apply').payload.data.result.reviewed_diff, true);
   assert.equal(page.getEditorText(), '= Fixed');
+
+  deliver(bridge.envelope(bridge.TYPES.PAGE_APPLY_EDIT, {
+    expectedText: '= Fixed',
+    expectedEditorToken: editorToken,
+    expectedFileLabel: 'main.typ',
+    changes: [{ from: 0, to: 7, insert: '= Auto' }],
+    callId: 'call-auto',
+    reviewedDiff: false
+  }, { requestId: 'auto', runId: 'run-auto', nonce: 'nonce' }));
+  assert.equal(page.posts.find(message => message.requestId === 'auto').payload.data.result.reviewed_diff, false);
+  assert.equal(page.getEditorText(), '= Auto');
 
   deliver(bridge.envelope(bridge.TYPES.PAGE_CLEAR_EDIT_PREVIEW, {
     callId: 'call-apply'
@@ -417,7 +432,8 @@ test('active breadcrumb path rejects a same-text bibliography edit after the use
     expectedEditorToken: editorToken,
     expectedFileLabel: 'references/ref.bib',
     changes: [{ from: 0, to: 6, insert: '= Wrong' }],
-    callId: 'call-path-switch'
+    callId: 'call-path-switch',
+    reviewedDiff: false
   }, { requestId: 'apply-path-switch', runId: 'run-path', nonce: 'nonce-path' }));
 
   assert.equal(page.posts.find(message => message.requestId === 'apply-path-switch').payload.data.result.code, 'STALE_EDIT_PREVIEW');

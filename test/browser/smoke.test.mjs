@@ -375,6 +375,11 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
       const events = [];
       const listener = message => { if (message.runId === runId) events.push(message); };
       chrome.runtime.onMessage.addListener(listener);
+      protocol.unwrapResponse(await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_RUN_RESERVE, {
+        tabId: tabIdValue,
+        projectId: 'browser-fixture',
+        sessionId: 'browser-file-tree-session'
+      }, { runId })));
       const response = await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_STREAM_START, {
         tabId: tabIdValue,
         projectId: 'browser-fixture',
@@ -401,6 +406,11 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
       const events = [];
       const listener = message => { if (message.runId === runId) events.push(message); };
       chrome.runtime.onMessage.addListener(listener);
+      protocol.unwrapResponse(await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_RUN_RESERVE, {
+        tabId: tabIdValue,
+        projectId: 'browser-fixture',
+        sessionId: 'browser-session'
+      }, { runId })));
       const response = await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_STREAM_START, {
         tabId: tabIdValue,
         projectId: 'browser-fixture',
@@ -747,6 +757,11 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
     const postRevertRun = await panel.evaluate(async ({ tabId: tabIdValue, sessionId, messages }) => {
       const protocol = await import(chrome.runtime.getURL('src/shared/protocol.js'));
       const runId = protocol.createRunId();
+      protocol.unwrapResponse(await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_RUN_RESERVE, {
+        tabId: tabIdValue,
+        projectId: 'browser-fixture',
+        sessionId
+      }, { runId })));
       const response = await chrome.runtime.sendMessage(protocol.buildRequest(protocol.PROTOCOL.AI_STREAM_START, {
         tabId: tabIdValue,
         projectId: 'browser-fixture',
@@ -889,8 +904,8 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
     assert.ok(!remoteRequests.some(url => url.startsWith('https://remote.example/')));
     assert.deepEqual(panelErrors, []);
 
-    // Reproduce the unpacked-extension failure: persist an obsolete MAIN-world
-    // registration, reload the extension under an already-open Typst tab, and
+    // Reproduce the MV3 recovery failure: persist an obsolete MAIN-world
+    // registration, terminate the worker under an already-open Typst tab, and
     // require the fresh worker to repair both the registration and live bridge.
     const staleFiles = await worker.evaluate(async () => {
       const [registration] = await chrome.scripting.getRegisteredContentScripts({ ids: ['typst-side-agent-main'] });
@@ -901,12 +916,56 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
     assert.ok(!staleFiles.includes('src/content/bridge-protocol.js'));
 
     const previousWorker = worker;
-    const replacementPromise = context.waitForEvent('serviceworker', {
-      predicate: candidate => candidate !== previousWorker,
-      timeout: 15_000
-    });
-    await previousWorker.evaluate(() => chrome.runtime.reload()).catch(() => {});
-    worker = await replacementPromise;
+    const cdp = await context.newCDPSession(fixturePage);
+    const { targetInfos } = await cdp.send('Target.getTargets');
+    const workerTarget = targetInfos.find(target =>
+      target.type === 'service_worker' && target.url === previousWorker.url()
+    );
+    assert.ok(workerTarget?.targetId, 'extension service-worker target was not discoverable');
+    await cdp.send('Target.closeTarget', { targetId: workerTarget.targetId });
+    await cdp.detach();
+
+    // A real browser tab update is a registered extension event and therefore
+    // wakes a stopped MV3 worker without reloading the original Typst tab.
+    const wakePage = await context.newPage();
+    await wakePage.goto('https://typst.app/project/browser-fixture');
+    await wakePage.waitForSelector('.cm-content');
+
+    // Playwright may retain the same Worker object across an MV3 restart and
+    // emit no new serviceworker event, so usability—not object identity—is the
+    // synchronization condition. Evaluating a live candidate wakes the worker.
+    let usableWorker = null;
+    for (let attempt = 0; attempt < 100 && !usableWorker; attempt++) {
+      const candidates = [...new Set([previousWorker, ...context.serviceWorkers().slice().reverse()])];
+      for (const candidate of candidates) {
+        const runtimeId = await candidate.evaluate(() => chrome.runtime.id).catch(() => null);
+        if (runtimeId === extensionId) {
+          usableWorker = candidate;
+          break;
+        }
+      }
+      if (!usableWorker) await fixturePage.waitForTimeout(100);
+    }
+    assert.ok(usableWorker, 'no usable extension service worker after worker termination');
+    worker = usableWorker;
+    await wakePage.close();
+
+    // A fresh panel performs a real runtime request after the worker is live,
+    // covering the same wake/reconnect path users take after an extension reload.
+    const recoveredPanel = await context.newPage();
+    let panelLoaded = false;
+    const panelLoadErrors = [];
+    for (let attempt = 0; attempt < 20 && !panelLoaded; attempt++) {
+      panelLoaded = await recoveredPanel.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 2_000
+      }).then(() => true, error => {
+        panelLoadErrors.push(error?.message || String(error));
+        return false;
+      });
+      if (!panelLoaded) await fixturePage.waitForTimeout(100);
+    }
+    assert.equal(panelLoaded, true, `extension panel did not wake after worker termination: ${panelLoadErrors.at(-1) || 'unknown error'}`);
 
     let repairedRegistration = null;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -919,8 +978,6 @@ test('packaged MV3 starts, bridges page context, streams locally, and sanitizes 
     }
     assert.equal(repairedRegistration?.js?.[0], 'src/content/bridge-protocol.js');
 
-    const recoveredPanel = await context.newPage();
-    await recoveredPanel.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
     await recoveredPanel.waitForSelector('#messages', { state: 'attached' });
     const recoveredContext = await recoveredPanel.evaluate(async tabIdValue => {
       const protocol = await import(chrome.runtime.getURL('src/shared/protocol.js'));
@@ -950,17 +1007,13 @@ async function waitForSavedEditorApprovalMode(panel, expected) {
 async function browserCandidates() {
   const candidates = [
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    chromium.executablePath(),
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'
+    chromium.executablePath()
   ].filter(Boolean);
   const out = [];
   for (const path of [...new Set(candidates)]) {
     try { await access(path, fsConstants.X_OK); out.push(path); } catch { /* unavailable */ }
   }
-  if (!out.length) throw new Error('No Chromium executable found. Run: npx playwright install chromium');
+  if (!out.length) throw new Error('Pinned Chromium executable not found. Run: npx --no-install playwright-core install --with-deps chromium');
   return out;
 }
 

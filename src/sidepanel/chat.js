@@ -893,7 +893,12 @@ export function flushPendingRender() {
   const follow = state.stream.followBeforeRender ?? isNearBottom();
   state.stream.followBeforeRender = null;
   if (state.stream.dirtyContent && state.stream.currentContentEl) {
-    renderMarkdownInto(state.stream.currentContentEl, state.stream.currentText);
+    // Keep the unfinished Markdown inert and update only text while streaming.
+    // The complete segment crosses the Marked + DOMPurify boundary once when
+    // it closes, avoiding repeated parsing of every growing prefix.
+    const pending = state.stream.currentText.slice(state.stream.renderedContentChars || 0);
+    if (pending) state.stream.currentContentTextNode?.appendData(pending);
+    state.stream.renderedContentChars = state.stream.currentText.length;
   }
   if (state.stream.dirtyReasoning && state.stream.currentReasoningEl) {
     const body = state.stream.currentReasoningEl.querySelector('.reasoning-body');
@@ -909,6 +914,18 @@ export function flushPendingRender() {
   if (changed) finishDomMutation(follow);
 }
 
+function finalizeCurrentContentSegment() {
+  if (!state.stream.currentContentEl) return;
+  flushPendingRender();
+  const follow = isNearBottom();
+  renderMarkdownInto(state.stream.currentContentEl, state.stream.currentText);
+  finishDomMutation(follow);
+  state.stream.currentContentEl = null;
+  state.stream.currentContentTextNode = null;
+  state.stream.currentText = '';
+  state.stream.renderedContentChars = 0;
+}
+
 function ensureContentSegment() {
   // If a reasoning segment is active, finalize it before starting answer text
   // so the "Thinking" block visually closes once the answer begins streaming.
@@ -920,7 +937,10 @@ function ensureContentSegment() {
   if (state.stream.currentContentEl) return;
   state.stream.currentContentEl = document.createElement('div');
   state.stream.currentContentEl.className = 'msg-content';
+  state.stream.currentContentTextNode = document.createTextNode('');
+  state.stream.currentContentEl.appendChild(state.stream.currentContentTextNode);
   state.stream.currentText = '';
+  state.stream.renderedContentChars = 0;
   state.stream.bodyEl.appendChild(state.stream.currentContentEl);
   state.stream.segments.push({ type: 'text', content: '' });
 }
@@ -949,9 +969,7 @@ export function appendReasoning(chunk) {
   if (!state.isStreaming || !state.stream.bodyEl || !chunk) return;
   // Reasoning always precedes the next content/tool segment. If we were already
   // emitting answer text, close that text segment so the order is preserved.
-  if (state.stream.currentContentEl) flushPendingRender();
-  state.stream.currentContentEl = null;
-  state.stream.currentText = '';
+  finalizeCurrentContentSegment();
   ensureReasoningSegment();
   state.stream.currentReasoningText += chunk;
   state.stream.allReasoning += chunk;
@@ -963,10 +981,9 @@ export function appendReasoning(chunk) {
 
 export function handleToolCalls(calls) {
   if (!state.isStreaming || !state.stream.bodyEl) return;
+  finalizeCurrentContentSegment();
   flushPendingRender();
   const follow = isNearBottom();
-  state.stream.currentContentEl = null;
-  state.stream.currentText = '';
   if (state.stream.currentReasoningEl) {
     state.stream.currentReasoningEl.classList.remove('open', 'is-live');
     state.stream.currentReasoningEl = null;
@@ -1238,6 +1255,7 @@ function clearRenderedSnapshotActions() {
 }
 
 export function finalizeStream(onSave, { responseStatus = 'incomplete' } = {}) {
+  finalizeCurrentContentSegment();
   flushPendingRender();
   if (state.stream.messageEl) state.stream.messageEl.classList.remove('streaming');
   if (state.stream.currentReasoningEl) {

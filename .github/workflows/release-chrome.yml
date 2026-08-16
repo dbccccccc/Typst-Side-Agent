@@ -20,17 +20,23 @@ jobs:
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
 
       - run: npm ci
+      - run: npm run audit:release
       - run: npm run verify
       - name: Install browser smoke dependencies
-        run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+        run: npx --no-install playwright-core install --with-deps chromium
+      - name: Browser smoke (first pass)
+        run: npm run test:browser
+      - name: Browser smoke (second pass)
+        run: npm run test:browser
 
       - name: Build extension zip
-        run: npm run package -- --expected-tag "${{ github.event.release.tag_name }}"
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: npm run package -- --expected-tag "$RELEASE_TAG"
       - run: npm run package:check
 
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

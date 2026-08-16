@@ -702,5 +702,6 @@
     return result;
   }
 
+  root.__typstAgentFindFilesPanelRoot = findFilesPanelRoot;
   root.__typstAgentWorkspaceExtract = extract;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);

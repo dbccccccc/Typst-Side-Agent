@@ -59,9 +59,9 @@
       required = allowed;
       if (typeof payload.expectedText !== 'string' || payload.expectedText.length > 1_000_000 || typeof payload.expectedEditorToken !== 'string' || !payload.expectedEditorToken || payload.expectedEditorToken.length > 200 || typeof payload.expectedFileLabel !== 'string' || !payload.expectedFileLabel || payload.expectedFileLabel.length > 240 || typeof payload.callId !== 'string' || !payload.callId || !validChanges(payload.changes, payload.expectedText.length) || !validDiffPreview(payload.preview)) return false;
     } else if (message.type === TYPES.PAGE_APPLY_EDIT) {
-      allowed = ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId'];
+      allowed = ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'reviewedDiff'];
       required = allowed;
-      if (typeof payload.expectedText !== 'string' || payload.expectedText.length > 1_000_000 || typeof payload.expectedEditorToken !== 'string' || !payload.expectedEditorToken || payload.expectedEditorToken.length > 200 || typeof payload.expectedFileLabel !== 'string' || !payload.expectedFileLabel || payload.expectedFileLabel.length > 240 || typeof payload.callId !== 'string' || !payload.callId || !validChanges(payload.changes, payload.expectedText.length)) return false;
+      if (typeof payload.expectedText !== 'string' || payload.expectedText.length > 1_000_000 || typeof payload.expectedEditorToken !== 'string' || !payload.expectedEditorToken || payload.expectedEditorToken.length > 200 || typeof payload.expectedFileLabel !== 'string' || !payload.expectedFileLabel || payload.expectedFileLabel.length > 240 || typeof payload.callId !== 'string' || !payload.callId || typeof payload.reviewedDiff !== 'boolean' || !validChanges(payload.changes, payload.expectedText.length)) return false;
     } else if (message.type === TYPES.PAGE_CLEAR_EDIT_PREVIEW) {
       allowed = ['callId'];
       required = allowed;

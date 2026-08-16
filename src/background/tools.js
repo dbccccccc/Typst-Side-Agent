@@ -99,7 +99,7 @@ export const BUILTIN_TOOLS = [
     function: {
       name: 'replace_lines',
       description:
-        'Replace an inclusive 1-indexed line range with new content. ALL THREE parameters are required: start_line, end_line, new_content. Call read_document first to find the correct line numbers; do not call replace_lines without them. To replace a single line, set start_line == end_line. new_content is inserted verbatim (include newlines if you want multiple lines).',
+        'Replace an inclusive 1-indexed line range with new content. ALL THREE parameters are required: start_line, end_line, new_content. Call read_document first to find the correct line numbers; do not call replace_lines without them. To replace a single line, set start_line == end_line. new_content is inserted verbatim (include newlines if you want multiple lines); an empty string deletes the physical line range including one boundary newline.',
       parameters: {
         type: 'object',
         properties: {

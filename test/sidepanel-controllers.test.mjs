@@ -61,6 +61,11 @@ test('transition coordinator provides single-flight sends and stale-navigation e
   assert.equal(coordinator.beginSend(identity), null);
   assert.equal(coordinator.isSendCurrent(send, identity), true);
   assert.equal(coordinator.isSendCurrent(send, { ...identity, sessionId: 'other' }), false);
+  assert.equal(coordinator.markReserved(send, 'run-a'), true);
+  assert.equal(coordinator.canDispatch(send), true);
+  assert.equal(coordinator.cancelRun('other'), false);
+  assert.equal(coordinator.cancelRun('run-a'), true);
+  assert.equal(coordinator.canDispatch(send), false);
   assert.equal(coordinator.endSend({}), false);
   assert.equal(coordinator.endSend(send), true);
   assert.ok(coordinator.beginSend(identity));
@@ -73,6 +78,15 @@ test('transition coordinator provides single-flight sends and stale-navigation e
   const currentSession = coordinator.nextSessionSwitch();
   assert.equal(coordinator.isSessionSwitchCurrent(oldSession), false);
   assert.equal(coordinator.isSessionSwitchCurrent(currentSession), true);
+});
+
+test('transition coordinator keeps cancellation sticky across reservation and start boundaries', () => {
+  const coordinator = createTransitionCoordinator();
+  const token = coordinator.beginSend({ projectId: 'p', sessionId: 's', history: [] });
+  assert.equal(coordinator.cancelSend(token), true);
+  assert.equal(coordinator.markReserved(token, 'run-a'), false);
+  assert.equal(coordinator.markStarting(token), false);
+  assert.equal(coordinator.isSendCurrent(token, token), false);
 });
 
 test('attachment controller owns selection/preview state, refresh, and minimized history', async () => {

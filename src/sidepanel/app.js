@@ -22,7 +22,7 @@ import {
   initModels, renderModelRegistry, renderModelSelector,
   initCustomTools, renderCustomToolRegistry,
   initMcpServers, renderMcpRegistry,
-  initSessionsManager, renderSessionsManager, openSessionsManagerPane
+  initSessionsManager, openSessionsManagerPane
 } from './settings-panel.js';
 import {
   setupMarkdown, renderMessages, renderUserMessage,
@@ -473,6 +473,7 @@ async function cancelActiveRunBeforeNavigation() {
   const run = state.activeRun;
   if (!run) return;
   setStatus('Stopping current run…');
+  transitions.cancelRun(run.runId);
   await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId: run.runId }).catch(() => {});
   await Promise.race([
     run.terminalPromise,
@@ -671,7 +672,10 @@ async function handleSend() {
   if (state.isStreaming) {
     setStatus('Stopping…');
     const runId = state.activeRun?.runId;
-    if (runId) await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId }).catch(() => {});
+    if (runId) {
+      transitions.cancelRun(runId);
+      await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId }).catch(() => {});
+    }
     return;
   }
   if (!state.activeTabOnTypst
@@ -694,6 +698,7 @@ async function handleSend() {
   updateComposerLockState();
 
   let startedRun = null;
+  let reservedRunId = null;
   try {
     const [originTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!Number.isInteger(originTab?.id) || projectIdFromTab(originTab) !== originProjectId || !originSessionId) {
@@ -729,6 +734,25 @@ async function handleSend() {
     const userEntry = { role: 'user', content: text, activeEditorFile };
     if (sentAttachments.selections.length || sentAttachments.previews.length) userEntry.sentAttachments = sentAttachments;
     const runId = createRunId();
+    await bg({
+      type: PROTOCOL.AI_RUN_RESERVE,
+      runId,
+      tabId: originTab.id,
+      projectId: originProjectId,
+      sessionId: originSessionId
+    });
+    reservedRunId = runId;
+    const reservationStillCurrent = transitions.isSendCurrent(sendToken, {
+      projectId: state.currentProjectId,
+      sessionId: state.currentSession?.id || null,
+      history: state.chatHistory
+    }) && state.activeTabId === originTab.id;
+    if (!reservationStillCurrent || !transitions.markReserved(sendToken, runId)) {
+      transitions.cancelSend(sendToken);
+      await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId }).catch(() => {});
+      setStatus('The active Typst project or chat changed while reserving the run. Nothing was sent.', true);
+      return;
+    }
     startedRun = runUiController.begin({
       runId,
       tabId: originTab.id,
@@ -750,7 +774,9 @@ async function handleSend() {
     state.stream = {
       messageEl, bodyEl,
       currentContentEl: null,
+      currentContentTextNode: null,
       currentText: '',
+      renderedContentChars: 0,
       allText: '',
       currentReasoningEl: null,
       currentReasoningText: '',
@@ -767,9 +793,24 @@ async function handleSend() {
 
     await saveSessionSnapshot(originSessionId, originHistory);
 
+    if (state.activeRun !== startedRun) return;
+    if (!transitions.canDispatch(sendToken)) {
+      finalizeStream(() => onStreamFinalize(startedRun), { responseStatus: 'incomplete' });
+      runUiController.complete(startedRun);
+      setStatus('Stopped');
+      return;
+    }
+
     maybeAutoNameSession({ session: originSession, history: originHistory }).catch(error => {
       setStatus(`Chat auto-name failed: ${error?.message || String(error)}`, true);
     });
+
+    if (!transitions.markStarting(sendToken)) {
+      finalizeStream(() => onStreamFinalize(startedRun), { responseStatus: 'incomplete' });
+      runUiController.complete(startedRun);
+      setStatus('Stopped');
+      return;
+    }
 
     bg({
       type: PROTOCOL.AI_STREAM_START,
@@ -787,7 +828,8 @@ async function handleSend() {
         failStream(r.error || 'Run failed', setStatus);
         runUiController.complete(state.activeRun);
       }
-    }).catch(e => {
+    }).catch(async e => {
+      await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId }).catch(() => {});
       if (state.activeRun?.runId === runId && state.isStreaming) {
         failStream(e.message, setStatus);
         runUiController.complete(state.activeRun);
@@ -795,8 +837,12 @@ async function handleSend() {
     });
 
   } catch (error) {
+    if (reservedRunId) await bg({ type: PROTOCOL.AI_STREAM_CANCEL, runId: reservedRunId }).catch(() => {});
     if (startedRun && state.activeRun === startedRun) {
-      if (state.isStreaming) failStream(error.message || String(error), setStatus);
+      if (state.isStreaming) {
+        if (transitions.canDispatch(sendToken)) failStream(error.message || String(error), setStatus);
+        else finalizeStream(() => onStreamFinalize(startedRun), { responseStatus: 'incomplete' });
+      }
       runUiController.complete(startedRun);
     } else {
       setStatus(error.message || String(error), true);

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 export const ARCHIVE_NAME = 'typst-side-agent.zip';
 export const CANONICAL_ROOTS = Object.freeze([
-  'manifest.json', 'src', 'docs', 'icons', 'README.md', 'ARCHITECTURE.md', 'PRIVACY.md', 'TESTING.md', 'LICENSE'
+  'manifest.json', 'src', 'docs', 'icons', 'README.md', 'ARCHITECTURE.md', 'PRIVACY.md', 'TESTING.md',
+  'SECURITY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'ROADMAP.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE'
 ]);
 const FORBIDDEN_EXTENSIONS = new Set(['.pem', '.key', '.crx', '.log', '.p12', '.pfx']);
 const FIXED_DOS_DATE = 0x21; // 1980-01-01
@@ -76,10 +77,15 @@ export async function validatePackageInputs(root, files, expectedTag = null) {
     }
   }
 
-  const readme = await readFile(resolve(root, 'README.md'), 'utf8');
-  for (const match of readme.matchAll(/\]\((\.\/[^)#?]+)(?:#[^)]*)?\)/g)) {
-    const target = normalizeReference(match[1]);
-    if (!paths.has(target)) throw new Error(`README local link is missing from archive: ${target}`);
+  for (const file of files.filter(item => item.archivePath.endsWith('.md'))) {
+    const markdown = await readFile(file.absolute, 'utf8');
+    for (const match of markdown.matchAll(/\]\(([^)]+)\)/g)) {
+      const rawReference = match[1].trim().replace(/^<|>$/g, '');
+      if (!rawReference || /^(?:https?:|mailto:|#)/i.test(rawReference)) continue;
+      const reference = rawReference.split(/[?#]/, 1)[0];
+      const target = posix.normalize(posix.join(posix.dirname(file.archivePath), reference));
+      if (!paths.has(target)) throw new Error(`${file.archivePath} local link is missing from archive: ${target}`);
+    }
   }
   return { version: manifest.version, paths };
 }

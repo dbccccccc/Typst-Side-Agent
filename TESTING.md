@@ -7,9 +7,9 @@ substitute for the packaged-artifact test.
 
 ## Prerequisites
 
-- Node.js 20.19 or newer (CI tests 20.19 and Node 22)
+- Node.js 22.13 or newer (CI tests Node 22.13 and Node 24 LTS)
 - npm with a clean `npm ci`
-- Chrome, Edge, or a Playwright-installed Chromium for the browser smoke
+- The Chromium revision installed by the pinned `playwright-core` dependency
 
 Install exact development dependencies:
 
@@ -45,7 +45,7 @@ Also run before handoff:
 
 ```bash
 git diff --check
-npm audit
+npm run audit:release
 ```
 
 The full audit is intentional: Marked and DOMPurify are declared as development
@@ -80,7 +80,7 @@ advisories rather than excluding all development dependencies.
 - stream batching, frame/event controller behavior, and absence of the old
   continuous main-world polling interval;
 - ordered MAIN-world recovery through web-accessible extension files when an
-  already-open Edge tab never completes the normal nonce handshake;
+  already-open Typst tab never completes the normal nonce handshake;
 - manifest references, immutable workflow action pins, permissions, version
   parity, bridge order, deterministic package contents, forbidden paths, and
   ZIP safety.
@@ -126,19 +126,21 @@ The smoke test does not use the source checkout as the extension directory. It:
    the buffer changes, and confirms the diff surface is removed;
 8. verifies live and imported hostile Markdown cannot create active elements,
    unsafe links, or remote image requests, and verifies plain-text fallback;
-9. intentionally persists a stale main-world registration, reloads the
-   extension beneath the still-open Typst fixture, and confirms registration,
-   nonce handshake, and document reads recover without a page reload;
+9. intentionally persists a stale main-world registration, terminates the MV3
+   worker beneath the still-open Typst fixture, wakes it through a browser
+   event and fresh panel, and confirms registration, nonce handshake, and
+   document reads recover without reloading the original page;
 10. checks for side-panel page errors and forbidden external requests.
 
 On CI, Chromium is installed with:
 
 ```bash
-npx playwright install --with-deps chromium
+npx --no-install playwright-core install --with-deps chromium
 ```
 
-Locally the test can use installed Chrome/Edge or Playwright Chromium. Run the
-browser smoke twice consecutively before release to catch service-worker
+The smoke uses the pinned Playwright Chromium because branded Chrome and Edge
+do not support the command-line extension sideload flags required by this test.
+Run it twice consecutively before release to catch service-worker
 startup/order races:
 
 ```bash
@@ -155,8 +157,8 @@ npm run package:check
 
 `npm run package` is the only packaging implementation. It reads one canonical
 root set, rejects symlinks/hidden/traversal/sensitive paths, verifies manifest
-and side-panel references, verifies local README links, enforces exact
-`manifest.json`/`package.json` version parity, optionally enforces a release
+and side-panel references, verifies local links in every packaged Markdown
+file, enforces exact `manifest.json`/`package.json` version parity, optionally enforces a release
 tag, sorts entries, and fixes ZIP timestamps/permissions.
 
 `package:check` compares the archive's exact ordered entry set with the
@@ -171,9 +173,10 @@ Get-FileHash -Algorithm SHA256 .\typst-side-agent.zip
 npm run package:check
 ```
 
-The artifact includes manifest, source, bundled Typst docs, icons, README,
-ARCHITECTURE, PRIVACY, TESTING, and LICENSE. It excludes tests, plans,
-dependencies, workflows, git data, credentials, browser profiles, and logs.
+The artifact includes manifest, source, exact third-party license texts, bundled
+Typst docs, icons, public project/release/security documents, and the project
+license. It excludes tests, dependencies, workflows, git data, credentials,
+browser profiles, internal planning material, and logs.
 
 ## Manual pre-release QA
 
@@ -191,6 +194,8 @@ the side panel and service worker.
   edits, approvals, stream events, and persistence stay with A.
 - [ ] Start independent runs from two panel windows if supported; stopping one
   must not stop, approve, or persist the other.
+- [ ] Start two sends for the same chat from separate panels. Exactly one is
+  admitted; the rejected panel must not append or persist a user turn.
 
 ### Models, rendering, and cancellation
 
@@ -200,6 +205,8 @@ the side panel and service worker.
 - [ ] Stop during initial fetch, SSE streaming, MCP discovery/call, custom-tool
   response read, preflight wait, and approval wait. Each path terminates once,
   retains visible partial output, and performs no later side effect.
+- [ ] Stop or switch chats while the initial session save is pending. The
+  reserved run must never reach provider discovery or page/tool dispatch.
 - [ ] Scroll upward during a long stream: the panel does not force-scroll and
   **Jump to latest** appears. Returning near the bottom resumes follow mode.
 - [ ] Paste model/imported Markdown containing raw HTML, event attributes,
@@ -217,6 +224,14 @@ the side panel and service worker.
 - [ ] Selection and image hover quick-add controls respond to selection,
   pointer, scroll, resize, route, and relevant DOM changes without continuous
   whole-page polling.
+- [ ] A long streamed answer remains inert while arriving, renders sanitized
+  Markdown when its segment closes, and typing in CodeMirror does not trigger
+  preview or Files-tree cache scans.
+- [ ] In one provider tool batch, open/read file A and then open/read file B;
+  each read must target its preceding open. Empty `replace_lines` calls must
+  delete first, middle, final, multi-line, only-line, and trailing-empty ranges.
+- [ ] Ask-mode edit receipts report `reviewed_diff: true`; Auto, restore, and
+  revert receipts report false while retaining the same stale-file/text guards.
 - [ ] Attached previews refresh from the originating tab immediately before
   Send. Non-vision models receive the documented text fallback.
 - [ ] `read_document`, `read_diagnostics`, and `read_typst_docs` run
@@ -330,17 +345,18 @@ the side panel and service worker.
 ## Release checklist
 
 1. Merge only after CI passes `npm run verify`, installs Chromium, runs the
-   packaged browser smoke, and builds the canonical artifact.
+   packaged browser smoke twice, and builds the canonical artifact.
 2. Set the same `X.Y.Z` version in `manifest.json` and `package.json`; run
    `npm ci` so the lockfile agrees.
-3. Update README, ARCHITECTURE, PRIVACY, and TESTING for behavior or data-flow
-   changes. Update vendored libraries only through the vendor script.
+3. Update README, ARCHITECTURE, PRIVACY, TESTING, and CHANGELOG for behavior or
+   data-flow changes. Update vendored code and license texts only through the
+   vendor script.
 4. Run locally:
 
    ```bash
    npm ci
    npm run verify
-npm audit
+   npm run audit:release
    npm run test:browser
    npm run test:browser
    npm run package
@@ -355,7 +371,7 @@ npm audit
 7. Publish a non-prerelease GitHub Release. Tag-only pushes and prereleases do
    not publish to the store.
 8. The release workflow checks out the release tag, runs `npm ci`,
-   `npm run verify`, the packaged browser smoke, packaging with `--expected-tag`,
+   `npm run verify`, two packaged browser smokes, packaging with `--expected-tag`,
    and `npm run package:check` in an unprivileged build job. Only the verified ZIP
    artifact then enters the protected `chrome-web-store` publishing job. Configure
    required reviewers and store credentials on that environment.

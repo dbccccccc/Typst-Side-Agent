@@ -99,7 +99,8 @@ export async function restoreDocumentSnapshot(payload, options = {}) {
     expectedEditorToken: context.editorToken,
     expectedFileLabel: snapshot.fileLabel,
     changes: [{ from: 0, to: context.fullText.length, insert: snapshot.text }],
-    callId: `restore-${snapshot.id}`
+    callId: `restore-${snapshot.id}`,
+    reviewedDiff: false
   }, { runId });
   const result = response?.result || response;
   if (result?.ok !== true) {

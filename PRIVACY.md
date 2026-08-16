@@ -1,6 +1,6 @@
 # Privacy Policy for Typst Side Agent
 
-Last updated: 2026-08-08
+Last updated: 2026-08-16
 
 Typst Side Agent is an independent open-source Chrome extension for assisting
 editing workflows on `typst.app`. This policy describes the packaged
@@ -165,5 +165,8 @@ These controls reduce risk but cannot guarantee the security or availability of
 a browser, account, network, or third-party endpoint.
 
 This policy will be updated when behavior or data practices materially change.
-Questions may be filed through the project issue tracker:
+General questions may be filed through the project issue tracker:
 https://github.com/dbccccccc/Typst-Side-Agent/issues
+
+Security vulnerabilities must be reported privately using
+[SECURITY.md](./SECURITY.md), not disclosed in a public issue.

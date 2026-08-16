@@ -16,6 +16,13 @@ const artifacts = [
     sha256: 'eb1f6b19880bc80a5fe34c6a61885173b60edda455ba7a33c98714db17d39f99'
   },
   {
+    packageName: 'marked',
+    version: '12.0.0',
+    source: 'node_modules/marked/LICENSE.md',
+    destination: 'src/sidepanel/lib/LICENSE.marked.md',
+    sha256: '8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c'
+  },
+  {
     packageName: 'dompurify',
     version: '3.4.13',
     source: 'node_modules/dompurify/dist/purify.min.js',
@@ -28,6 +35,20 @@ const artifacts = [
     source: 'node_modules/dompurify/dist/purify.min.js.map',
     destination: 'src/sidepanel/lib/purify.min.js.map',
     sha256: 'ef340d89dbe85999e57899ec63bfd1f53dee2d430843cdeb9680ccc6608225c3'
+  },
+  {
+    packageName: 'dompurify',
+    version: '3.4.13',
+    source: 'node_modules/dompurify/LICENSE',
+    destination: 'src/sidepanel/lib/LICENSE.dompurify-apache.txt',
+    sha256: 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+  },
+  {
+    packageName: 'dompurify',
+    version: '3.4.13',
+    source: 'node_modules/dompurify/LICENSE-MPL',
+    destination: 'src/sidepanel/lib/LICENSE.dompurify-mpl.txt',
+    sha256: 'fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85'
   }
 ];
 

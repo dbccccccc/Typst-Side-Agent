@@ -1,7 +1,7 @@
 import { TYPST_APP_PREFIX } from '../shared/constants.js';
 import {
   PROTOCOL, buildRequest, errorResponse, successResponse,
-  unwrapResponse, validateEnvelope, validateRunCancelEnvelope, validateRunStartEnvelope
+  unwrapResponse, validateEnvelope, validateRunCancelEnvelope, validateRunReserveEnvelope, validateRunStartEnvelope
 } from '../shared/protocol.js';
 import {
   loadSettings, saveSettings,
@@ -10,7 +10,7 @@ import {
   sessionStorageStatus, loadCustomTools, saveCustomTools,
   loadMcpServers, saveMcpServers, loadTheme, saveTheme, restrictStorageAccess
 } from './storage.js';
-import { handleStreamStart, abortRun, generateSessionTitle, getActiveRunSummaries, resolvePreflight, resolveApproval } from './agent.js';
+import { handleStreamStart, reserveRun, abortRun, generateSessionTitle, getActiveRunSummaries, resolvePreflight, resolveApproval } from './agent.js';
 import { listMcpToolsDetailed } from './mcp.js';
 import { ensureMainWorldRegistration, injectIntoExistingTypstTabs } from './content-bootstrap.js';
 import { quickAttachSource } from '../shared/quick-attach.js';
@@ -244,6 +244,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case PROTOCOL.GET_PREVIEW: return respond(sendResponse, message, forwardToSelectedTab(payload.tabId, PROTOCOL.PAGE_GET_PREVIEW, payload));
     case PROTOCOL.GET_DIAGNOSTICS: return respond(sendResponse, message, forwardToSelectedTab(payload.tabId, PROTOCOL.PAGE_GET_DIAGNOSTICS));
 
+    case PROTOCOL.AI_RUN_RESERVE: {
+      const valid = validateRunReserveEnvelope(message);
+      if (!valid.ok) return respond(sendResponse, message, Promise.reject(coded(valid.error.code, valid.error.message)));
+      if (revertingTabs.has(payload.tabId) || snapshotMutationTabs.has(payload.tabId)) return respond(sendResponse, message, Promise.reject(coded('DOCUMENT_RECOVERY_ACTIVE', 'Wait for the active document recovery operation on this tab to finish before starting an agent run.')));
+      return respond(sendResponse, message, Promise.resolve().then(() => reserveRun(message)));
+    }
     case PROTOCOL.AI_STREAM_START: {
       const valid = validateRunStartEnvelope(message);
       if (!valid.ok) return respond(sendResponse, message, Promise.reject(coded(valid.error.code, valid.error.message)));

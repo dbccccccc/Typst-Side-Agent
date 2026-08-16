@@ -7,10 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { buildZip, collectPackageFiles, createArchive, listZipEntries, validatePackageInputs } from '../scripts/package-extension.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageMetadata = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 
-test('canonical package includes user-facing docs/runtime and excludes development or sensitive paths', async () => {
+test('canonical package includes linked public docs, license texts, and runtime while excluding development or sensitive paths', async () => {
   const names = (await collectPackageFiles(root)).map(file => file.archivePath);
-  for (const required of ['manifest.json', 'README.md', 'ARCHITECTURE.md', 'PRIVACY.md', 'TESTING.md', 'LICENSE', 'src/sidepanel/index.html']) assert.ok(names.includes(required), required);
+  for (const required of [
+    'manifest.json', 'README.md', 'ARCHITECTURE.md', 'PRIVACY.md', 'TESTING.md',
+    'SECURITY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'ROADMAP.md',
+    'THIRD_PARTY_NOTICES.md', 'LICENSE', 'src/sidepanel/index.html',
+    'src/sidepanel/lib/LICENSE.marked.md',
+    'src/sidepanel/lib/LICENSE.dompurify-apache.txt',
+    'src/sidepanel/lib/LICENSE.dompurify-mpl.txt'
+  ]) assert.ok(names.includes(required), required);
   assert.ok(!names.some(name => /^(?:test|plans|node_modules|\.git|\.github)\//.test(name)));
   assert.ok(!names.some(name => /\.(?:pem|key|crx|log)$/i.test(name)));
   assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en')));
@@ -18,9 +26,11 @@ test('canonical package includes user-facing docs/runtime and excludes developme
 
 test('manifest/package versions match and release tag mismatch fails before packaging', async () => {
   const files = await collectPackageFiles(root);
-  const { version } = await validatePackageInputs(root, files, 'v1.0.1');
-  assert.equal(version, '1.0.1');
-  await assert.rejects(validatePackageInputs(root, files, 'v9.9.9'), /does not match/);
+  const { version } = await validatePackageInputs(root, files, `v${packageMetadata.version}`);
+  assert.equal(version, packageMetadata.version);
+  const parts = packageMetadata.version.split('.').map(Number);
+  const differentTag = `v${parts[0]}.${parts[1]}.${parts[2] + 1}`;
+  await assert.rejects(validatePackageInputs(root, files, differentTag), /does not match/);
 });
 
 test('deterministic archive builds twice with stable ordered safe entries', async () => {

@@ -32,14 +32,19 @@ test('page bridge requires correlation and run identity at its trust boundary', 
     expectedEditorToken: 'editor-1',
     expectedFileLabel: 'main.typ',
     changes: [{ from: 0, to: 3, insert: 'new' }],
-    callId: 'call-2'
+    callId: 'call-2',
+    reviewedDiff: true
   }, { requestId: 'request-2', runId: 'run-1' });
   assert.equal(bridge.valid(applyRequest), true);
   assert.equal(bridge.valid({ ...applyRequest, runId: '' }), false);
   assert.equal(bridge.valid({ ...applyRequest, payload: { ...applyRequest.payload, changes: [{ from: 3, to: 1, insert: '' }] } }), false);
 
   const showRequest = bridge.envelope(bridge.TYPES.PAGE_SHOW_EDIT_PREVIEW, {
-    ...applyRequest.payload,
+    expectedText: 'old',
+    expectedEditorToken: 'editor-1',
+    expectedFileLabel: 'main.typ',
+    changes: [{ from: 0, to: 3, insert: 'new' }],
+    callId: 'call-2',
     preview: {
       kind: 'unified-diff', fileLabel: 'main.typ', additions: 1, deletions: 1,
       hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, rows: [

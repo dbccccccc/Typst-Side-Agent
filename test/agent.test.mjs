@@ -64,21 +64,21 @@ test('splitInlineThink: multiple blocks', () => {
 
 // ---------- sortToolCallsForExecution ----------
 
-test('sortToolCallsForExecution: read_diagnostics runs last', () => {
+test('sortToolCallsForExecution: stateful diagnostics keep provider order', () => {
   const calls = [
     { name: 'read_diagnostics', parsedArgs: {} },
     { name: 'search_replace', parsedArgs: {} },
-    { name: 'replace_lines', parsedArgs: { start_line: 5 } }
+    { name: 'replace_lines', parsedArgs: { start_line: 5, end_line: 5 } }
   ];
   const sorted = sortToolCallsForExecution(calls);
-  assert.equal(sorted[sorted.length - 1].name, 'read_diagnostics');
+  assert.deepEqual(sorted.map(call => call.name), calls.map(call => call.name));
 });
 
 test('sortToolCallsForExecution: replace_lines ordered bottom-to-top', () => {
   const calls = [
-    { name: 'replace_lines', parsedArgs: { start_line: 3 } },
-    { name: 'replace_lines', parsedArgs: { start_line: 10 } },
-    { name: 'replace_lines', parsedArgs: { start_line: 6 } }
+    { name: 'replace_lines', parsedArgs: { start_line: 3, end_line: 3 } },
+    { name: 'replace_lines', parsedArgs: { start_line: 10, end_line: 10 } },
+    { name: 'replace_lines', parsedArgs: { start_line: 6, end_line: 6 } }
   ];
   const sorted = sortToolCallsForExecution(calls);
   assert.deepEqual(sorted.map(c => c.parsedArgs.start_line), [10, 6, 3]);
@@ -91,6 +91,41 @@ test('sortToolCallsForExecution: non-edit tools keep relative order', () => {
   ];
   const sorted = sortToolCallsForExecution(calls);
   assert.deepEqual(sorted.map(c => c.name), ['search_replace', 'insert_at_cursor']);
+});
+
+test('sortToolCallsForExecution: line batches never cross file or read barriers', () => {
+  const calls = [
+    { name: 'open_project_file', parsedArgs: { path: 'a.typ' } },
+    { name: 'replace_lines', parsedArgs: { start_line: 2, end_line: 2 } },
+    { name: 'read_document', parsedArgs: {} },
+    { name: 'open_project_file', parsedArgs: { path: 'b.typ' } },
+    { name: 'replace_lines', parsedArgs: { start_line: 3, end_line: 3 } },
+    { name: 'replace_lines', parsedArgs: { start_line: 8, end_line: 8 } },
+    { name: 'read_document', parsedArgs: {} }
+  ];
+  const sorted = sortToolCallsForExecution(calls);
+  assert.deepEqual(sorted.map(call => [call.name, call.parsedArgs.start_line || call.parsedArgs.path || '']), [
+    ['open_project_file', 'a.typ'],
+    ['replace_lines', 2],
+    ['read_document', ''],
+    ['open_project_file', 'b.typ'],
+    ['replace_lines', 8],
+    ['replace_lines', 3],
+    ['read_document', '']
+  ]);
+});
+
+test('sortToolCallsForExecution: ambiguous or malformed line groups preserve provider order', () => {
+  const overlapping = [
+    { name: 'replace_lines', parsedArgs: { start_line: 2, end_line: 5 } },
+    { name: 'replace_lines', parsedArgs: { start_line: 4, end_line: 7 } }
+  ];
+  const malformed = [
+    { name: 'replace_lines', parsedArgs: { start_line: 9 } },
+    { name: 'replace_lines', parsedArgs: { start_line: 3, end_line: 3 } }
+  ];
+  assert.deepEqual(sortToolCallsForExecution(overlapping), overlapping);
+  assert.deepEqual(sortToolCallsForExecution(malformed), malformed);
 });
 
 // ---------- sanitizeTitle ----------

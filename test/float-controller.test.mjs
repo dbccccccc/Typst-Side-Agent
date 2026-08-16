@@ -68,6 +68,79 @@ test('editor input does not invalidate broad preview or workspace scans', async 
   controller.stop();
 });
 
+test('surface observers ignore CodeMirror mutations and scope preview and Files invalidations', async () => {
+  const makeNode = (kind, parent = null) => ({
+    kind,
+    parent,
+    closest(selector) {
+      for (let current = this; current; current = current.parent) {
+        if (selector.includes('.cm-editor') && current.kind === 'editor') return current;
+        if (selector.includes('Files') && current.kind === 'files') return current;
+      }
+      return null;
+    },
+    matches(selector) {
+      return (this.kind === 'preview' && /canvas|preview/.test(selector))
+        || (this.kind === 'files' && /Files|tree/.test(selector));
+    },
+    querySelector() { return null; }
+  });
+  const document = new FakeDocument();
+  const window = new EventTarget();
+  window.setTimeout = setTimeout;
+  window.clearTimeout = clearTimeout;
+  const shell = makeNode('shell');
+  const editor = makeNode('editor', shell);
+  const editorChild = makeNode('editor-child', editor);
+  const files = makeNode('files', shell);
+  const preview = makeNode('preview', shell);
+  document.body = shell;
+  const frames = [];
+  const flushed = [];
+  const instances = [];
+  class Observer {
+    constructor(callback) { this.callback = callback; this.targets = []; instances.push(this); }
+    observe(target) { this.targets.push(target); }
+    disconnect() {}
+  }
+  const controller = globalThis.__typstAgentCreateFloatController({
+    document,
+    window,
+    filesRoot: files,
+    previewRoots: [preview],
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+    cancelAnimationFrame: () => {},
+    MutationObserver: Observer,
+    onFlush: flags => flushed.push([...flags].sort())
+  });
+  frames.shift()();
+  flushed.length = 0;
+  const rootObserver = instances.find(instance => instance.targets.includes(shell));
+  const filesObserver = instances.find(instance => instance.targets.includes(files));
+  const previewObserver = instances.find(instance => instance.targets.includes(preview));
+  assert.ok(rootObserver && filesObserver && previewObserver);
+
+  rootObserver.callback([{ target: editor, addedNodes: [editorChild], removedNodes: [] }]);
+  await new Promise(resolve => { setTimeout(resolve, 60); });
+  assert.equal(frames.length, 0);
+
+  filesObserver.callback([{ target: files, addedNodes: [], removedNodes: [] }]);
+  await new Promise(resolve => { setTimeout(resolve, 60); });
+  frames.shift()();
+  assert.deepEqual(flushed.shift(), ['workspace']);
+
+  previewObserver.callback([{ target: preview, addedNodes: [], removedNodes: [] }]);
+  await new Promise(resolve => { setTimeout(resolve, 60); });
+  frames.shift()();
+  assert.deepEqual(flushed.shift(), ['preview']);
+
+  rootObserver.callback([{ target: shell, addedNodes: [makeNode('preview', shell)], removedNodes: [] }]);
+  await new Promise(resolve => { setTimeout(resolve, 60); });
+  frames.shift()();
+  assert.deepEqual(flushed.shift(), ['layout', 'preview', 'workspace']);
+  controller.stop();
+});
+
 test('main-world controller contains no continuous polling interval', async () => {
   const source = await readFile(new URL('../src/content/main.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /setInterval\s*\(/);

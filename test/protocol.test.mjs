@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MESSAGE_REGISTRY, PROTOCOL, buildRequest, buildRunEvent, errorResponse,
-  successResponse, unwrapResponse, validateEnvelope, validateMessagePayload, validateRunStartEnvelope
+  successResponse, unwrapResponse, validateEnvelope, validateMessagePayload, validateRunReserveEnvelope, validateRunStartEnvelope
 } from '../src/shared/protocol.js';
 
 test('protocol registry has unique values and documents every constant', () => {
@@ -28,6 +28,19 @@ test('run messages require explicit immutable run identity', () => {
   const event = buildRunEvent(PROTOCOL.AI_STREAM_DONE, 'run-a', {});
   assert.equal(validateEnvelope(event).ok, true);
   assert.equal(event.runId, 'run-a');
+});
+
+test('run status is a correlated request without a run id and reservations require exact identity', () => {
+  const status = buildRequest(PROTOCOL.AI_RUN_STATUS, { projectId: 'project', sessionId: 'session' });
+  assert.equal(validateEnvelope(status).ok, true);
+  assert.equal(Object.hasOwn(status, 'runId'), false);
+
+  const reservation = buildRequest(PROTOCOL.AI_RUN_RESERVE, {
+    tabId: 4, projectId: 'project', sessionId: 'session'
+  }, { runId: 'run-a' });
+  assert.equal(validateRunReserveEnvelope(reservation).ok, true);
+  reservation.payload.extra = true;
+  assert.equal(validateRunReserveEnvelope(reservation).error.code, 'UNKNOWN_PAYLOAD_FIELD');
 });
 
 test('run start rejects invalid tab, project, session, and messages', () => {
@@ -145,9 +158,13 @@ test('reviewed edit previews and atomic commits are structurally validated', () 
     expectedEditorToken: 'editor-1',
     expectedFileLabel: 'main.typ',
     changes: [{ from: 0, to: 3, insert: 'new' }],
-    callId: 'call-edit'
+    callId: 'call-edit',
+    reviewedDiff: true
   }, { runId: 'run-edit' });
   assert.equal(validateEnvelope(commit).ok, true);
+  const missingReviewReceipt = structuredClone(commit);
+  delete missingReviewReceipt.payload.reviewedDiff;
+  assert.equal(validateEnvelope(missingReviewReceipt).error.code, 'MISSING_PAYLOAD_FIELD');
   commit.payload.changes[0].to = -1;
   assert.equal(validateEnvelope(commit).error.code, 'INVALID_PREPARED_EDIT');
 

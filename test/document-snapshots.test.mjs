@@ -90,6 +90,7 @@ test('snapshot restore previews current-to-saved diff, stores a rescue copy, and
         assert.equal(requestPayload.expectedEditorToken, 'editor-one');
         assert.equal(requestPayload.expectedFileLabel, 'main.typ');
         assert.deepEqual(requestPayload.changes, [{ from: 0, to: '= Current'.length, insert: '= Saved' }]);
+        assert.equal(requestPayload.reviewedDiff, false);
         live = '= Saved';
         return { result: { ok: true, edits_applied: 1 } };
       }

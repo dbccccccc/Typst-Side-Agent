@@ -12,7 +12,7 @@ Side panel (extension page)
              │ chrome.runtime envelopes
              ▼
 MV3 service worker
-  tab lifecycle, storage router, per-run agent, provider/custom/MCP fetch
+  tab lifecycle, storage router, run admission/planning, provider/custom/MCP fetch
              │ chrome.tabs envelopes
              ▼
 Isolated content script
@@ -41,10 +41,10 @@ self-heals the persisted dynamic main-world registration to this order:
 5. `main.js`
 
 The worker also attempts the same idempotent injection into already-open Typst
-tabs. If an Edge build accepts the isolated injection but declines
-`chrome.scripting.executeScript` for the existing tab's MAIN world, the
-isolated bridge detects the missing nonce handshake after 200 ms and loads the
-same hard-coded, web-accessible bundle through short-lived script elements.
+tabs. If direct `chrome.scripting.executeScript` MAIN-world injection is
+unavailable for an existing tab, the isolated bridge detects the missing nonce
+handshake after 200 ms and loads the same hard-coded, web-accessible bundle
+through short-lived script elements.
 This repairs install, update, browser-start, and unpacked-extension reload
 cases, including stale registrations retained by Chromium. A main runtime
 marks itself loaded only after its protocol dependency exists, and every
@@ -97,7 +97,7 @@ use either `{ok:true,data}` or `{ok:false,error:{code,message,details?}}`.
 
 | Direction | Message families | Owner |
 |---|---|---|
-| Panel → worker | settings, sessions, integration registries, context reads, run start/cancel, approvals | `service-worker.js` |
+| Panel → worker | settings, sessions, integration registries, context reads, run reserve/start/status/cancel, approvals | `service-worker.js` |
 | Worker → panel | active-tab/quick-attach notifications, stream batches, tool/preflight/approval events, terminal events | `app.js` |
 | Worker → page | context/preview/diagnostic/probe reads and exact tool execution | isolated/main bridge |
 | Page → worker | correlated responses and quick-attach intents | isolated bridge |
@@ -111,22 +111,34 @@ shared protocol leaf.
 1. Send captures an immutable `runId`, tab ID, project ID, session ID, history
    reference, model settings, the normalized editor approval mode, refreshed
    attachments, and an identity-only breadcrumb snapshot of the open project
-   file. The normalized identity is persisted on that user message.
-2. The worker creates an independent `AbortController`, re-reads the captured
+   file. Before the panel mutates history or saves the user turn, it reserves
+   that exact identity with the worker. One reserved or active run may own a
+   project/chat pair; unrelated chats remain independent. Reservations and
+   pre-start cancellation tombstones have bounded counts and expiry.
+2. Stop and navigation mark the panel send token cancelled. Every preparation
+   await rechecks that token, so a cancelled reservation can never dispatch a
+   later start. The worker consumes only an exact reservation; cancel-before-
+   start prevents tab, provider, custom-tool, MCP, and page work.
+3. The worker creates an independent `AbortController`, re-reads the captured
    tab, and rejects it if it is no longer a Typst page.
-3. Custom/MCP discovery builds one registry from exact identities. Visible
+4. Custom/MCP discovery builds one registry from exact identities. Visible
    names cannot overwrite another route; schemas are bounded and validated.
-4. Trusted system instructions and separately labeled untrusted context/history
+5. Trusted system instructions and separately labeled untrusted context/history
    become the provider conversation. Every retained user message with a captured
    file gets its file context directly before it; document-read results do not
    repeat file identity.
-5. Provider deltas are parsed with arbitrary chunk boundaries. Adjacent channel
+6. Provider deltas are parsed with arbitrary chunk boundaries. Adjacent channel
    text is batched for at most 32 ms; the panel renders at most once per frame.
-6. Tool calls are bounded, parsed as JSON, schema-validated, and looked up by
+7. Tool calls are bounded, parsed as JSON, schema-validated, and looked up by
    exact visible name. Preflight checks page capability on the captured tab.
    Document reads and editor writes also compare the live breadcrumb identity
    with the send-time file; a mismatch waits for the user to reopen that file.
-7. Read-only built-ins run automatically. Editor writes resolve against a live
+   Provider order is preserved across opens, reads, diagnostics, external
+   effects, and other stateful barriers. Only a contiguous `replace_lines`
+   group is reordered bottom-to-top.
+8. Read-only built-ins run automatically. `read_file_structure` reports
+   `complete: false` for truncated, collapsed, or unclassified rows. Editor
+   writes resolve against a live
    editor snapshot. Ask mode waits for an exact `(runId, callId)` diff review;
    Auto approve mode skips only that editor-review wait. Both send bounded
    absolute changes plus the captured text/editor/focused-file identity to one atomic
@@ -134,19 +146,21 @@ shared protocol leaf.
    tab. Before the first page commit, the worker durably stages one pre-run
    document checkpoint; later writes advance the same final-state hash. If
    checkpoint staging fails, the page edit is not sent. Stale commits fail closed.
+   The apply receipt reports `reviewed_diff: true` only for the exact Ask-mode
+   proposal the user approved; Auto, snapshot restore, and revert report false.
    External calls retain exact-call approval,
    configuration-fingerprinted saved trust, and in-memory run grants that expire
    at terminal cleanup. Cleartext consent is bound to the exact stored origin and
    revalidated at the final network-dispatch boundary.
-8. Tool/provider/page operations share the run signal. Network bodies are bounded
+9. Tool/provider/page operations share the run signal. Network bodies are bounded
    while their streams are consumed, and oversized readers are cancelled. Stop races operations
    that ignore `AbortSignal`, emits one terminal cancellation, and prevents
    later stream or side-effect work.
-9. Done, cancelled, and error paths preserve bounded partial output and save it
+10. Done, cancelled, and error paths preserve bounded partial output and save it
    to the captured session, not whichever session is currently visible.
 
-Two runs can coexist without sharing controller state, approvals, cancellation,
-tab routing, session persistence, or event acceptance.
+Two runs for different project/chat pairs can coexist without sharing controller
+state, approvals, cancellation, tab routing, persistence, or event acceptance.
 
 ## Revert lifecycle
 
@@ -281,7 +295,8 @@ normalized to `unavailable` because their local body is intentionally absent.
 
 ## UI controllers and performance
 
-- `app.js` composes the UI controllers and owns only panel-level orchestration.
+- `app.js` is the panel composition root and owns cross-controller send,
+  session, tab, and snapshot orchestration.
 - `session-controller.js` owns session navigation and captured-session saves.
 - `attachment-controller.js` owns bounded transient attachment state.
 - `run-ui-controller.js` owns active-run correlation and terminal UI cleanup.
@@ -294,12 +309,15 @@ normalized to `unavailable` because their local body is intentionally absent.
 - `provider.js`, `tool-registry.js`, and `storage.js` own their background
   domains behind adapter-friendly boundaries.
 - `float-controller.js` converts selection, pointer, scroll, resize, mutation,
-  and route events into coalesced animation-frame updates. No whole-page polling
+  and route events into coalesced animation-frame updates. Mutation observers
+  bind to explicit preview and Files roots; a filtered shell observer rebinds
+  replaced roots, and CodeMirror mutations are ignored. No whole-page polling
   interval remains.
 
-Stream batches preserve exact reasoning/content ordering. DOM rendering is
-frame-coalesced; auto-scroll happens only while the user remains near the
-bottom, otherwise **Jump to latest** is shown.
+Stream batches preserve exact reasoning/content ordering. Unfinished Markdown
+is appended as inert text using only the new suffix; a completed segment is
+parsed and sanitized once. Auto-scroll happens only while the user remains near
+the bottom, otherwise **Jump to latest** is shown.
 
 ## Adding a message or tool
 
@@ -323,10 +341,12 @@ For a new tool:
 
 ## Verification contract
 
-`npm run verify` is the required source gate. Risk-weighted line floors are
-65% for `agent.js`, 80% for `mcp.js`, and 75% for `storage.js`. The packaged
-browser smoke starts the MV3 worker and side panel from an extracted canonical
-ZIP, exercises the page bridge and local provider stream, verifies hostile
-live/imported rendering, then reloads the extension under an already-open
-Typst tab with an intentionally stale registration and requires recovery. See
+`npm run verify` is the required source gate. Exact risk-weighted line floors
+are source-owned in `scripts/check-coverage.mjs`, which prevents this document
+from becoming a second configuration surface. The packaged browser smoke starts
+the MV3 worker and side panel from an extracted canonical ZIP, exercises the
+page bridge and local provider stream, verifies hostile
+live/imported rendering, then terminates the MV3 worker under an already-open
+Typst tab with an intentionally stale registration and requires cold-start
+recovery without relying on Playwright Worker object replacement. See
 [TESTING.md](./TESTING.md).

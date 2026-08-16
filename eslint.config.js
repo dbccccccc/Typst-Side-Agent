@@ -34,6 +34,12 @@ const correctnessRules = {
   'no-unsafe-negation': 'error',
   'no-unsafe-optional-chaining': 'error',
   'no-unused-labels': 'error',
+  'no-unused-vars': ['error', {
+    argsIgnorePattern: '^_',
+    caughtErrorsIgnorePattern: '^_',
+    varsIgnorePattern: '^_',
+    ignoreRestSiblings: true
+  }],
   'no-useless-backreference': 'error',
   'no-useless-catch': 'error',
   'no-useless-escape': 'error',
@@ -44,7 +50,7 @@ const correctnessRules = {
 };
 
 export default [
-  { ignores: ['node_modules/**', 'src/sidepanel/lib/**', 'typst-side-agent.zip', 'plans/**'] },
+  { ignores: ['node_modules/**', 'src/sidepanel/lib/**', 'typst-side-agent.zip'] },
   {
     files: ['src/**/*.js'],
     languageOptions: {
