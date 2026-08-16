@@ -1,5 +1,7 @@
 # Typst Visualize
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Images, shapes, colors, gradients, strokes, and drawing.
 
 ---
@@ -8,7 +10,7 @@
 
 ```typc
 image(
-  source: str|bytes,
+  source: str|path|bytes,
   format: auto|str|dictionary,
   width: auto|relative,
   height: auto|relative|fraction,
@@ -147,6 +149,8 @@ curve.close(mode: str)
 )
 ```
 
+The former drawing `path` element was removed in Typst 0.15. Use `curve` for vector paths; the new foundations `path` type represents file-system paths instead.
+
 ---
 
 ## Color
@@ -164,6 +168,7 @@ oklch(l: float, c: float, h: angle, alpha: float)
 color.linear-rgb(r, g, b, alpha: float)
 color.hsl(h: angle, s: ratio, l: ratio, alpha: float)
 color.hsv(h: angle, s: ratio, v: ratio, alpha: float)
+color.spot(name: str, fallback: color)
 ```
 
 ### Predefined Colors
@@ -191,6 +196,13 @@ olive, green, lime
 #rect(fill: red.lighten(50%))
 #rect(fill: rgb("#1E90FF").darken(20%))
 #text(fill: gradient.linear(..color.map.rainbow))[Rainbow]
+
+// Spot ink with a process-color fallback and a 70% tint.
+#let ink = color.spot("PANTONE 2221 C", rgb("#239dad"))
+#rect(fill: ink.tint(70%))
+
+// Diverging scientific color map added in 0.15.
+#rect(fill: gradient.linear(..color.map.coolwarm))
 ```
 
 ---
@@ -266,12 +278,12 @@ stroke(
 
 ---
 
-## Tiling (Patterns)
+## Tiling
 
-Repeating pattern fill.
+Repeating fill. The old `pattern` type was removed in Typst 0.15; use `tiling`.
 
 ```typc
-tiling(size: array, spacing: array, relative: auto|str, content) -> tiling
+tiling(size: array, spacing: array, relative: auto|str, offset: array, content) -> tiling
 ```
 
 ```typst
@@ -280,4 +292,9 @@ tiling(size: array, spacing: array, relative: auto|str, content) -> tiling
   #place(line(start: (0%, 100%), end: (100%, 0%)))
 ]
 #rect(fill: pat, width: 100%, height: 60pt)
+
+// Shift the repeated cells without moving the painted object.
+#rect(fill: tiling(size: (10pt, 10pt), offset: (5pt, 5pt))[
+  #circle(radius: 1pt, fill: blue)
+])
 ```

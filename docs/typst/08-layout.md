@@ -1,5 +1,7 @@
 # Typst Layout
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Page setup, alignment, spacing, grids, blocks, and positioning.
 
 ---
@@ -11,7 +13,8 @@ page(
   width: auto|relative,
   height: auto|relative,
   margin: auto|relative|dictionary,
-  binding: auto|relative,
+  binding: auto|alignment,
+  bleed: relative|dictionary,
   columns: int,
   gutter: length,
   fill: none|color|gradient|tiling,
@@ -41,6 +44,17 @@ page(
 #set page(margin: (top: 1in, bottom: 0.5in, left: 1in, right: 0.5in)) // per side
 #set page(margin: auto)                   // automatic (default ~2.5cm)
 ```
+
+### Bleed
+
+Typst 0.15 can define a print bleed globally or per edge:
+
+```typst
+#set page(bleed: 3mm)
+#set page(bleed: (top: 3mm, right: 3mm, bottom: 3mm, left: 3mm))
+```
+
+Content such as a page background may extend into this area for trimming.
 
 ### Headers and Footers
 
@@ -97,6 +111,7 @@ Combined: `center + top`, `right + bottom`, `start + horizon`, etc.
 #v(1em)                // fixed vertical space
 #v(1fr)                // fractional (fills available)
 #v(1em, weak: true)    // removed at page breaks
+#v(1fr, weak: true)    // weak fractional spacing (supported in 0.15)
 ```
 
 ### Horizontal Space
@@ -105,6 +120,7 @@ Combined: `center + top`, `right + bottom`, `start + horizon`, etc.
 #h(1em)                // fixed horizontal
 #h(1fr)                // push content apart
 #h(1em, weak: true)    // removed at line breaks
+#h(1fr, weak: true)    // weak fractional spacing (supported in 0.15)
 ```
 
 ### Padding
@@ -155,7 +171,7 @@ Inline-level container.
 box(
   width: auto|relative|fraction,
   height: auto|relative,
-  baseline: relative,
+  baseline: auto|relative,
   fill, stroke, radius, inset, outset, clip,
   none|content,
 ) -> content
@@ -165,6 +181,8 @@ box(
 #box(fill: aqua, inset: 4pt)[highlighted]
 #box(height: 9pt, image("icon.svg"))
 ```
+
+In Typst 0.15, an inline box with `baseline: auto` retains the baseline of its first contained line. Baselines are also retained more consistently by other layout containers, so old manual baseline offsets may need review.
 
 ---
 

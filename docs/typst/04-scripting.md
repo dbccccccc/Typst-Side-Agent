@@ -1,5 +1,7 @@
 # Typst Scripting
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Variables, functions, control flow, blocks, modules, packages, imports.
 
 ---
@@ -189,6 +191,7 @@ Multiple expressions where one is expected. Values are **joined**.
 #for letter in "abc" { .. }          // iterates grapheme clusters
 #for byte in bytes("abc") { .. }     // iterates bytes (int 0-255)
 #for i in range(10) { .. }
+#for i in range(1, 5, inclusive: true) { .. } // includes 5
 
 // With index
 #for (i, item) in items.enumerate() { .. }
@@ -253,22 +256,29 @@ Evaluates a file and returns its content:
 ### Import
 
 ```typst
-import "bar.typ"              // import as 'bar' (filename w/o extension)
-import "bar.typ" as baz       // rename
-import "bar.typ": a, b        // import specific items
-import "bar.typ": *           // import all items
-import "bar.typ": a as one    // rename items
-import "bar.typ": a, b, c     // multiple items
+#import "bar.typ"              // import as 'bar' (filename w/o extension)
+#import "bar.typ" as baz       // rename
+#import "bar.typ": a, b        // import specific items
+#import "bar.typ": *           // import all items
+#import "bar.typ": a as one    // rename items
+#import "bar.typ": a, b, c     // multiple items
 ```
 
 Items must be defined in the imported file via `let` bindings.
 
+Typst 0.15 paths use forward slashes on every platform. A `path("assets/logo.svg")` value also remembers which source file created it, so modules can safely export file references:
+
+```typst
+#let logo = path("assets/logo.svg")
+#image(logo)
+```
+
 ### Packages
 
 ```typst
-import "@preview/cetz:0.3.1"
-import "@preview/cetz:0.3.1": canvas, draw
-import "@preview/cetz:0.3.1" as cetz
+#import "@preview/cetz:0.3.1"
+#import "@preview/cetz:0.3.1": canvas, draw
+#import "@preview/cetz:0.3.1" as cetz
 ```
 
 - `@preview/` — community packages on Typst Universe

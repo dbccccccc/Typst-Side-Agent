@@ -6,35 +6,52 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  build:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22'
+          cache: npm
 
-      - name: Run tests
-        run: npm test
+      - run: npm ci
+      - run: npm run verify
+      - name: Install browser smoke dependencies
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
 
       - name: Build extension zip
-        run: |
-          zip -r typst-side-agent.zip manifest.json src docs icons README.md LICENSE \
-            -x '*.DS_Store' -x '*/.*'
+        run: npm run package -- --expected-tag "${{ github.event.release.tag_name }}"
+      - run: npm run package:check
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: typst-side-agent-release
           path: typst-side-agent.zip
           retention-days: 90
 
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    needs: build
+    runs-on: ubuntu-latest
+    # Approval and store credentials are requested only after verification.
+    environment: chrome-web-store
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: typst-side-agent-release
+
       - name: Upload and publish to Chrome Web Store
-        uses: browser-actions/release-chrome-extension@v0
+        uses: browser-actions/release-chrome-extension@bde2f9ad09b20a52d4e71eca4a9daf99d412a8d9 # v0
         with:
           extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
           extension-path: typst-side-agent.zip

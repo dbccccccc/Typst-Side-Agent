@@ -1,18 +1,24 @@
 /** Global side-panel state. Mutated in place; modules read directly. */
+import { buildRequest, unwrapResponse } from '../shared/protocol.js';
 
 export const state = {
   activeTabOnTypst: false,
+  activeTabId: null,
+  activeWindowId: null,
   currentProjectId: null,
   currentSession: null,
   chatHistory: [],
   isStreaming: false,
+  activeRun: null,
 
   settings: {
     systemPrompt: '',
     models: [],
     activeModelId: null,
     maxHistoryMessages: 40,
-    autoNameModelId: null
+    autoNameModelId: null,
+    editorApprovalMode: 'ask',
+    sendMessageShortcut: 'enter'
   },
 
   customTools: [],
@@ -33,16 +39,13 @@ export const state = {
     currentReasoningText: '',
     allReasoning: '',
     toolCalls: [],
-    segments: []
+    segments: [],
+    renderFrame: null,
+    dirtyContent: false,
+    dirtyReasoning: false,
+    followBeforeRender: null
   }
 };
-
-export function resetAttachments() {
-  state.attachments = {
-    selections: [],
-    previews: []
-  };
-}
 
 export function resetStream() {
   state.stream = {
@@ -55,7 +58,11 @@ export function resetStream() {
     currentReasoningText: '',
     allReasoning: '',
     toolCalls: [],
-    segments: []
+    segments: [],
+    renderFrame: null,
+    dirtyContent: false,
+    dirtyReasoning: false,
+    followBeforeRender: null
   };
 }
 
@@ -68,4 +75,8 @@ export function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export const bg = (msg) => chrome.runtime.sendMessage(msg);
+export async function bg(message) {
+  const { type, runId, ...payload } = message || {};
+  const response = await chrome.runtime.sendMessage(buildRequest(type, payload, { runId }));
+  return unwrapResponse(response);
+}

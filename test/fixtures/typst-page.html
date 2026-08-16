@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Browser project – ref.bib – Typst</title>
+  <style>
+    body { margin: 0; background: #19181f; color: #fdfdfd; }
+    .project-breadcrumb { position: fixed; top: 8px; left: 50%; z-index: 2; transform: translateX(-50%); display: flex; gap: 6px; font: 13px/18px sans-serif; }
+    .cm-editor { position: relative; width: 800px; height: 240px; overflow: hidden; background: transparent; }
+    .cm-scroller { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; overflow: auto; }
+    .cm-gutters { min-height: 240px; background: #19181f; font: 13px/18.2px "Cascadia Mono", monospace; }
+    .cm-gutterElement { height: 18.2px; padding-right: 7px; box-sizing: border-box; text-align: right; }
+    .cm-content { min-height: 240px; font: 13px/18.2px "Cascadia Mono", monospace; }
+    .cm-line { min-height: 18.2px; padding-left: 4px; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="project-breadcrumb" role="heading" aria-level="1">
+      <span><span><span aria-label="Online" role="status"></span> Browser account</span><svg width="8" height="8" aria-hidden="true"></svg></span>
+      <span><span>Browser project</span><svg width="8" height="8" aria-hidden="true"></svg></span>
+      <span><span>ref.bib</span></span>
+    </div>
+  </header>
+  <aside role="region" aria-label="Files">
+    <h2>Files</h2>
+    <ul>
+      <li>
+        <button type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13L4 4H7C9 4 10 5 11 7H15L13 13Z"></path></svg><span>chapters</span></button>
+        <ul>
+          <li><button type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2L4 2V13H12V6M8 2L12 6M8 2V6H12"></path></svg><span>intro.typ</span></button></li>
+          <li><button type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 12.8V3.2H5C6.7 3.2 8.2 4.3 8.8 5.9H13.5V12.8H2.5Z"></path></svg><span>drafts</span></button></li>
+        </ul>
+      </li>
+      <li><button type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2L4 2V13H12V6M8 2L12 6M8 2V6H12"></path></svg><span>ref.bib</span></button></li>
+    </ul>
+  </aside>
+  <main>
+    <div id="editor-root" class="cm-editor">
+      <div id="editor-scroller" class="cm-scroller">
+        <div class="cm-gutters">
+          <div class="cm-gutter cm-lineNumbers"><div id="gutter-line-1" class="cm-gutterElement">1</div></div>
+        </div>
+        <div id="editor" class="cm-content"><div id="editor-line-1" class="cm-line">= Browser fixture</div></div>
+      </div>
+    </div>
+    <canvas id="preview" width="320" height="200"></canvas>
+  </main>
+  <script>
+    (() => {
+      let text = '= Browser fixture';
+      const editor = document.getElementById('editor');
+      const editorRoot = document.getElementById('editor-root');
+      const editorScroller = document.getElementById('editor-scroller');
+      const editorLine = document.getElementById('editor-line-1');
+      const doc = {
+        get lines() { return text.split('\n').length; },
+        get length() { return text.length; },
+        line(number) {
+          const lines = text.split('\n');
+          let from = 0;
+          for (let index = 1; index < number; index++) from += lines[index - 1].length + 1;
+          return { number, from, to: from + lines[number - 1].length, text: lines[number - 1] };
+        },
+        lineAt(position) {
+          let from = 0;
+          const lines = text.split('\n');
+          for (let index = 0; index < lines.length; index++) {
+            const to = from + lines[index].length;
+            if (position <= to || index === lines.length - 1) return { number: index + 1, from, to, text: lines[index] };
+            from = to + 1;
+          }
+        },
+        toString() { return text; }
+      };
+      const state = {
+        doc,
+        selection: { main: { head: 0, from: 0, to: 0, empty: true } },
+        sliceDoc(from, to) { return text.slice(from, to); }
+      };
+      const view = {
+        state,
+        dom: editorRoot,
+        contentDOM: editor,
+        scrollDOM: editorScroller,
+        dispatch({ changes }) {
+          const list = Array.isArray(changes) ? [...changes] : [changes];
+          for (const change of list.sort((left, right) => right.from - left.from)) {
+            text = text.slice(0, change.from) + change.insert + text.slice(change.to);
+          }
+          editorLine.textContent = text;
+        },
+        coordsAtPos() {
+          const rect = editor.parentElement.getBoundingClientRect();
+          return { left: rect.left + 44, right: rect.left + 44, top: rect.top + 4, bottom: rect.top + 22.2 };
+        },
+        posAtDOM() { return 0; },
+        requestMeasure() {}
+      };
+      editor.cmView = { editorView: view };
+      const context = document.getElementById('preview').getContext('2d');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, 320, 200);
+      context.fillStyle = '#111';
+      context.fillText('fixture', 10, 20);
+    })();
+  </script>
+</body>
+</html>

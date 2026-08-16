@@ -1,5 +1,7 @@
 # Typst Syntax Basics
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Core syntax: modes, literals, comments, identifiers, paths, operators, escape sequences.
 
 ---
@@ -87,9 +89,14 @@ $ x^2 $                      // math block (spaces around content)
 
 ## Paths
 
-**Relative path** (from current file):
+Typst 0.15 accepts both strings and the new `path` type wherever a file path is expected. Paths always use forward slashes (`/`), including on Windows.
+
+**Relative path** (from the file where the path originates):
 ```typst
 #image("images/logo.png")
+
+#let logo = path("images/logo.png")
+#image(logo)
 ```
 
 **Absolute path** (from project root):
@@ -97,6 +104,8 @@ $ x^2 $                      // math block (spaces around content)
 #image("/assets/logo.png")
 ```
 
+- A `path` remembers the source file it came from, so a module can safely return it to another file or across a package boundary
+- Backslashes are not path separators: `"images\\logo.png"` is invalid as a file path
 - Default project root: parent directory of the main Typst file
 - CLI flag `--root` to set a custom root
 - In web app: the project directory is the root
@@ -125,7 +134,7 @@ $ x^2 $                      // math block (spaces around content)
 | 1 | `=`, `+=`, `-=`, `*=`, `/=` (assignment) |
 
 - Higher precedence = binds stronger
-- Modulo (`%`) has no syntax; use `calc.mod(x, y)`
+- Remainder (`%`) has no syntax; use `calc.rem(x, y)`
 
 ---
 

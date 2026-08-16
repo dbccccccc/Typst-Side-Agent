@@ -1,5 +1,7 @@
 # Typst Styling
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Set rules, show rules, selectors, and the styling system.
 
 ---
@@ -138,10 +140,13 @@ Define which elements a show rule targets.
 
 ```typst
 heading.where(level: 1).or(heading.where(level: 2))
-heading.where(level: 1).and(outlined: true)
+heading.where(level: 1).and(heading.where(outlined: true))
 selector(heading).before(here())
 selector(heading).after(here())
+selector(strong).within(list)
 ```
+
+`within` was added in Typst 0.15 to select elements nested inside another element. Locational selectors (`before`, `after`, and `within`) are for introspection such as `query`; they cannot be used as show-rule selectors.
 
 ---
 

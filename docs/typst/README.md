@@ -1,6 +1,21 @@
 # Typst Grammar Documentation Collection
 
-> A topic-separated, concise, and efficient markdown collection for learning Typst, extracted from [typst.app/docs](https://typst.app/docs/).
+> Target: **Typst 0.15.1**. Last reviewed: **2026-08-08**.
+>
+> A topic-separated, agent-oriented condensation of the official Typst reference. It is bundled with the extension and does not fetch documentation at runtime.
+
+## Version and Provenance
+
+This collection was reviewed against the current [Typst 0.15.1 documentation](https://typst.app/docs/), the [0.15.0 changelog](https://typst.app/docs/changelog/0.15.0/) (the complete language/compiler delta from 0.14.2), the corrective [0.15.1 changelog](https://typst.app/docs/changelog/0.15.1/), and the live [language reference](https://typst.app/docs/reference/).
+
+The 0.15 refresh covers the new `path` type and forward-slash-only paths; collection, calculation, and integer additions; variable fonts; math and baseline behavior; page bleed; spot colors and tiling offsets; `within` selectors and counter display locations; bundle documents/assets; dividers; multiple bibliographies; XML namespaces; and removed 0.14 compatibility APIs.
+
+This is a concise reference, not a verbatim mirror. When updating it again:
+
+1. Change `DOCS_TYPST_VERSION` and `DOCS_REVIEWED_DATE` in `src/background/docs.js`.
+2. Review every release note since the recorded version and the affected live API pages.
+3. Update the topic files and keep the version banner in each one consistent.
+4. Run `npm run verify`, `npm run package`, and `npm run package:check`.
 
 ---
 

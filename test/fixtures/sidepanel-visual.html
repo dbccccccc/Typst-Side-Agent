@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Typst Side Agent visual fixture</title>
+  <link rel="stylesheet" href="../../src/sidepanel/styles.css">
+  <style>body { width: min(390px, 100vw); }</style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-left">
+        <div class="app-mark" aria-hidden="true">
+          <img src="../../icons/icon32.png" alt="">
+        </div>
+        <button type="button" class="header-btn"><span>Polish thesis layout</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+      <div class="header-right">
+        <button type="button" class="header-btn header-btn-sm"><span>Claude Sonnet</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button type="button" class="icon-btn" aria-label="Settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+    </header>
+
+    <div id="status-region" class="status-region" aria-live="polite" aria-atomic="true">
+      <div id="status" class="status-toast hidden" role="status" aria-hidden="true">
+        <span class="status-toast-icon" aria-hidden="true">
+          <svg class="status-toast-info-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <svg class="status-toast-error-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.7 2.7 17a2 2 0 0 0 1.74 3h15.12a2 2 0 0 0 1.74-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg>
+        </span>
+        <span id="status-message" class="status-toast-message"></span>
+        <span class="status-toast-actions">
+          <button id="status-copy" type="button" class="status-toast-action status-copy" title="Copy message" aria-label="Copy notification message">
+            <svg class="status-copy-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            <svg class="status-copy-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg>
+          </button>
+          <button id="status-close" type="button" class="status-toast-action" title="Dismiss" aria-label="Dismiss notification"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        </span>
+      </div>
+    </div>
+
+    <div id="settings-panel" class="settings-panel collapsed">
+      <div class="settings-inner">
+        <div class="settings-topline">
+          <div class="settings-title-wrap"><span class="settings-kicker">Workspace</span><strong class="settings-title">Agent settings</strong></div>
+          <button type="button" class="icon-btn settings-close" aria-label="Close settings">×</button>
+        </div>
+        <nav class="settings-tabs">
+          <button type="button" class="settings-tab active">General</button>
+          <button type="button" class="settings-tab">Models</button>
+          <button type="button" class="settings-tab">Tools</button>
+          <button type="button" class="settings-tab">MCP</button>
+          <button type="button" class="settings-tab">Sessions</button>
+        </nav>
+        <section class="settings-tab-pane active">
+          <div class="settings-section">
+            <div class="settings-label">Appearance</div>
+            <div class="seg-switch"><button type="button" class="seg-opt">Light</button><button type="button" class="seg-opt active">Dark</button></div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">Send message</div>
+            <label class="field"><span>Choose which shortcut sends your prompt. The other Enter shortcuts insert a new line.</span><select id="send-message-shortcut"><option value="enter">Enter</option><option value="shift-enter">Shift + Enter</option><option value="ctrl-enter">Ctrl + Enter</option></select></label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">Conversation</div>
+            <label class="field"><span>History cap</span><input type="number" value="40"></label>
+            <label class="field"><span>Auto-name model</span><select><option>Claude Sonnet</option></select></label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-label">System prompt</div>
+            <label class="field"><textarea rows="5" placeholder="Use the built-in default"></textarea></label>
+            <div class="form-actions"><button type="button" class="btn btn-primary">Save changes</button></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div id="messages" class="messages"></div>
+    <button id="jump-latest" type="button" class="jump-latest hidden">New content ↓</button>
+
+    <div id="revert-dialog-layer" class="snapshot-dialog-layer hidden" role="presentation">
+      <section class="snapshot-dialog revert-dialog" role="dialog" aria-modal="true" aria-labelledby="revert-dialog-title" aria-describedby="revert-dialog-subtitle">
+        <header class="snapshot-dialog-header">
+          <div class="snapshot-dialog-heading">
+            <strong id="revert-dialog-title">Revert these changes?</strong>
+            <span id="revert-dialog-subtitle"></span>
+          </div>
+          <button id="revert-dialog-close" type="button" class="snapshot-dialog-close" title="Close" aria-label="Close revert confirmation">×</button>
+        </header>
+        <div id="revert-dialog-body" class="snapshot-dialog-body revert-dialog-body"></div>
+        <footer class="snapshot-dialog-actions">
+          <button id="revert-dialog-cancel" type="button" class="btn btn-ghost">Cancel</button>
+          <button id="revert-dialog-confirm" type="button" class="btn btn-primary">Revert changes</button>
+        </footer>
+      </section>
+    </div>
+
+    <div class="composer">
+      <div class="composer-surface">
+        <div id="context-attachments" class="context-attachments"></div>
+        <div class="input-row"><textarea id="user-input" rows="1" placeholder="Ask about this document…"></textarea></div>
+        <div class="composer-toolbar">
+          <div class="context-bar">
+            <button type="button" class="add-context-btn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14"/><path d="M5 12h14"/></svg> Context</button>
+            <div id="editor-permission-wrap" class="editor-permission-wrap">
+              <button type="button" id="editor-permission-btn" class="add-context-btn editor-permission-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Document edits: ask before applying">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+                <span>Edits</span><span id="editor-permission-current" class="editor-permission-current">Ask</span>
+                <svg class="editor-permission-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div id="editor-permission-menu" class="add-context-menu editor-permission-menu hidden" role="menu" aria-label="Document edit behavior">
+                <button type="button" class="editor-permission-option active" data-editor-approval-mode="ask" role="menuitemradio" aria-checked="true">
+                  <span class="editor-permission-option-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+                  <span class="editor-permission-option-copy"><span class="opt-title">Ask before applying</span><span class="opt-hint">Review each proposed document change before it is applied.</span></span>
+                  <span class="editor-permission-option-check" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg></span>
+                </button>
+                <button type="button" class="editor-permission-option" data-editor-approval-mode="auto" role="menuitemradio" aria-checked="false">
+                  <span class="editor-permission-option-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-9 12h8l-1 8 9-12h-8l1-8Z"/></svg></span>
+                  <span class="editor-permission-option-copy"><span class="opt-title">Auto approve</span><span class="opt-hint">Apply built-in document edits immediately. External tools keep their own approval rules.</span></span>
+                  <span class="editor-permission-option-check" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 12 4 4L19 6"/></svg></span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-actions"><span id="send-shortcut-hint" class="send-shortcut">Enter</span><button id="send-btn" type="button" class="send-btn" title="Send message"></button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="../../src/sidepanel/lib/purify.min.js"></script>
+  <script src="../../src/sidepanel/lib/marked.min.js"></script>
+  <script type="module" src="sidepanel-visual.mjs"></script>
+</body>
+</html>

@@ -3,8 +3,12 @@
  * docs/typst/. Files are loaded from the extension package on demand and
  * cached in-memory for the lifetime of the service worker.
  *
- * Source: https://typst.app/docs/ (condensed, topic-separated).
+ * Target: Typst 0.15.1. Source: https://typst.app/docs/ (condensed,
+ * topic-separated; reviewed against the 0.15.0 and 0.15.1 changelogs).
  */
+
+export const DOCS_TYPST_VERSION = '0.15.1';
+export const DOCS_REVIEWED_DATE = '2026-08-08';
 
 export const DOC_TOPICS = [
   {
@@ -12,7 +16,7 @@ export const DOC_TOPICS = [
     file: '01-syntax-basics.md',
     title: 'Syntax Basics',
     summary:
-      'Three modes (markup / code / math), literals, comments, identifiers, paths, operators, special chars.'
+      'Three modes (markup / code / math), literals, comments, identifiers, 0.15 file paths, operators, special chars.'
   },
   {
     id: 'markup',
@@ -40,7 +44,7 @@ export const DOC_TOPICS = [
     file: '05-types.md',
     title: 'Types',
     summary:
-      'Primitive types, content, array / dict / string methods, calc module, conversions.'
+      'Primitive types, path, content, collections, range, calc module, conversions.'
   },
   {
     id: 'styling',
@@ -68,14 +72,14 @@ export const DOC_TOPICS = [
     file: '09-visualize.md',
     title: 'Visualize',
     summary:
-      'image(), shapes (rect, circle, …), colors, gradients, strokes, path / curve.'
+      'image(), shapes (rect, circle, …), spot colors, gradients, strokes, tiling, curve.'
   },
   {
     id: 'model',
     file: '10-model-elements.md',
     title: 'Model / Elements',
     summary:
-      'Document metadata, figure + caption, table / tablex, outline, bibliography, refs.'
+      'Document metadata and bundles, divider, figures, tables, outlines, multiple bibliographies, refs.'
   },
   {
     id: 'data-loading',
@@ -157,13 +161,22 @@ export async function readDocTopic(topicInput) {
   if (!id) {
     return {
       ok: false,
+      version: DOCS_TYPST_VERSION,
+      reviewed_at: DOCS_REVIEWED_DATE,
       error: `Unknown Typst docs topic: "${topicInput}". Call read_typst_docs with no topic to list available topics.`,
       available: listDocTopics()
     };
   }
   const topic = DOC_TOPICS.find(t => t.id === id);
   if (DOC_CACHE.has(id)) {
-    return { ok: true, topic: id, title: topic.title, content: DOC_CACHE.get(id) };
+    return {
+      ok: true,
+      version: DOCS_TYPST_VERSION,
+      reviewed_at: DOCS_REVIEWED_DATE,
+      topic: id,
+      title: topic.title,
+      content: DOC_CACHE.get(id)
+    };
   }
   try {
     const url = chrome.runtime.getURL(`docs/typst/${topic.file}`);
@@ -173,7 +186,14 @@ export async function readDocTopic(topicInput) {
     }
     const content = await resp.text();
     DOC_CACHE.set(id, content);
-    return { ok: true, topic: id, title: topic.title, content };
+    return {
+      ok: true,
+      version: DOCS_TYPST_VERSION,
+      reviewed_at: DOCS_REVIEWED_DATE,
+      topic: id,
+      title: topic.title,
+      content
+    };
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   }

@@ -6,11 +6,27 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.mjs",
-    "check": "node scripts/check-syntax.mjs"
+    "check": "node scripts/check-syntax.mjs",
+    "vendor:update": "node scripts/vendor-sidepanel-libs.mjs update",
+    "vendor:verify": "node scripts/vendor-sidepanel-libs.mjs verify",
+    "package": "node scripts/package-extension.mjs",
+    "package:check": "node scripts/check-package.mjs",
+    "lint": "eslint .",
+    "check:imports": "node scripts/check-imports.mjs",
+    "test:browser": "node --test test/browser/smoke.test.mjs",
+    "coverage": "node scripts/check-coverage.mjs",
+    "verify": "npm run lint && npm run check && npm run check:imports && npm run vendor:verify && npm run coverage"
+  },
+  "devDependencies": {
+    "dompurify": "3.4.13",
+    "eslint": "10.8.1",
+    "globals": "17.9.0",
+    "marked": "12.0.0",
+    "playwright-core": "1.62.1"
   }
 }

@@ -217,31 +217,38 @@
   /** Extract the first typst error sentence out of `text`. Returns
    *  `{ head, rest }` where `head` is the sentence-ish message and `rest`
    *  is everything after it. If no known prefix is found, `head` is the
-   *  whole text. */
+   *  whole text. Prefer the earliest prefix in the actual string; otherwise
+   *  a later parenthetical such as "(expected comma)" could incorrectly
+   *  discard the leading "Failed to parse …" message. */
   function extractFirstSentence(text) {
     const low = text.toLowerCase();
+    let first = null;
     for (const prefix of TYPST_ERROR_PREFIXES) {
       const idx = low.indexOf(prefix);
       if (idx === -1) continue;
-      // Walk forward until we hit a sentence-ish boundary: period followed
-      // by space + uppercase, a known next section header, or end of text.
-      const after = text.slice(idx);
-      const boundaries = [
-        /\.\s+[A-Z]/,
-        /\s+comments\b/i,
-        /\s+misspellings?\b/i,
-        /\s+no\s+spelling\b/i,
-        /\s+no\s+comments\b/i,
-        /\s+add\s+the\s+first\s+one\b/i
-      ];
-      let cut = after.length;
-      for (const b of boundaries) {
-        const m = after.match(b);
-        if (m && m.index != null && m.index < cut) cut = m.index;
+      if (!first || idx < first.idx || (idx === first.idx && prefix.length > first.prefix.length)) {
+        first = { idx, prefix };
       }
-      return { head: after.slice(0, cut).trim(), rest: after.slice(cut).trim() };
     }
-    return { head: text.trim(), rest: '' };
+    if (!first) return { head: text.trim(), rest: '' };
+
+    // Walk forward until we hit a sentence-ish boundary: period followed
+    // by space + uppercase, a known next section header, or end of text.
+    const after = text.slice(first.idx);
+    const boundaries = [
+      /\.\s+[A-Z]/,
+      /\s+comments\b/i,
+      /\s+misspellings?\b/i,
+      /\s+no\s+spelling\b/i,
+      /\s+no\s+comments\b/i,
+      /\s+add\s+the\s+first\s+one\b/i
+    ];
+    let cut = after.length;
+    for (const boundary of boundaries) {
+      const match = after.match(boundary);
+      if (match && match.index != null && match.index < cut) cut = match.index;
+    }
+    return { head: after.slice(0, cut).trim(), rest: after.slice(cut).trim() };
   }
 
   /** typst.app frequently puts the raw source snippet at the end of the row
@@ -322,8 +329,7 @@
     return out.filter(el => !out.some(o => o !== el && o.contains(el)));
   }
 
-  function extractDiagnostics(doc) {
-    const cutoff = viewportCutoff(doc);
+  function extractLineDiagnostics(doc, cutoff) {
     const badges = findLineBadges(doc, cutoff);
     const seenRows = new WeakSet();
     const out = [];
@@ -345,25 +351,284 @@
       if (d) out.push(d);
     }
 
-    // Dedupe by (line, message)
+    return out;
+  }
+
+  /** Locate the mounted Improve panel by semantics instead of CSS-module
+   *  class names. The live app exposes it as a left-side region containing an
+   *  accessible heading named "Improve". */
+  function findImprovePanel(doc, cutoff) {
+    const regions = doc.querySelectorAll('[role="region"]');
+    for (let i = 0; i < regions.length; i++) {
+      const region = regions[i];
+      if (!inLeftSidebar(region, cutoff)) continue;
+      const headings = region.querySelectorAll('[role="heading"], h1, h2, h3, h4, strong');
+      for (let j = 0; j < headings.length; j++) {
+        if (/^Improve$/i.test(ownText(headings[j]))) return region;
+      }
+    }
+    return null;
+  }
+
+  /** Parse summaries such as "1 compiler error", "2 compiler warnings",
+   *  "1 compiler error, 2 warnings", and "No compiler errors". Null means
+   *  that the text is not an authoritative compiler summary. */
+  function parseCompilerSummary(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!/\bcompiler\b/i.test(value)) return null;
+
+    let errors = null;
+    let warnings = null;
+    if (/\bno\s+compiler\s+errors?\b/i.test(value)) errors = 0;
+    if (/\bno\s+(?:compiler\s+)?warnings?\b/i.test(value)) warnings = 0;
+
+    const countRe = /(\d+)\s+(?:compiler\s+)?(errors?|warnings?)/gi;
+    let match;
+    while ((match = countRe.exec(value)) !== null) {
+      const count = Math.min(10_000, parseInt(match[1], 10));
+      if (!Number.isFinite(count)) continue;
+      if (/^error/i.test(match[2])) errors = count;
+      else warnings = count;
+    }
+
+    if (errors == null && warnings == null) return null;
+    return { errors, warnings, text: value };
+  }
+
+  function findFollowingList(node, panel) {
+    let current = node;
+    for (let level = 0; current && current !== panel && level < 5; level++) {
+      let sibling = current.nextElementSibling;
+      while (sibling) {
+        if (sibling.getAttribute?.('role') === 'list') return sibling;
+        // Once another compiler summary begins, this group has no visible
+        // list. The summary fallback below will preserve the reported count.
+        if (parseCompilerSummary(fullText(sibling))) break;
+        sibling = sibling.nextElementSibling;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function findCompilerGroups(panel) {
+    const groups = [];
+    const buttons = panel.querySelectorAll('button');
+    for (let i = 0; i < buttons.length; i++) {
+      const summary = parseCompilerSummary(fullText(buttons[i]));
+      if (!summary) continue;
+      groups.push({ node: buttons[i], list: findFollowingList(buttons[i], panel), summary });
+    }
+
+    // Keep working if typst.app changes the group header from a button to a
+    // static label. `ownText` avoids selecting every ancestor of the label.
+    if (!groups.length) {
+      const labels = panel.querySelectorAll('p, span, div, strong');
+      for (let i = 0; i < labels.length; i++) {
+        const summary = parseCompilerSummary(ownText(labels[i]));
+        if (!summary) continue;
+        groups.push({ node: labels[i], list: findFollowingList(labels[i], panel), summary });
+      }
+    }
+    return groups;
+  }
+
+  /** typst.app does not render a "0 compiler errors" group when every Improve
+   *  category is empty. Instead it replaces all groups with this dedicated,
+   *  accessible empty-state message. That message is affirmative evidence of
+   *  a clean panel, not an extractor failure. */
+  function hasExplicitEmptyState(panel) {
+    const paragraphs = panel.querySelectorAll('p');
+    for (let i = 0; i < paragraphs.length; i++) {
+      const text = fullText(paragraphs[i]);
+      if (/\bThere is nothing we can suggest at the moment\b/i.test(text)) return true;
+    }
+    return false;
+  }
+
+  function compilerCardMessage(row) {
+    const paragraphs = row.querySelectorAll('p, [role="paragraph"]');
+    for (let i = 0; i < paragraphs.length; i++) {
+      const text = fullText(paragraphs[i]);
+      if (!text || text.length > 2_000 || LINE_BADGE_RE.test(text)) continue;
+      return text;
+    }
+    return fullText(row)
+      .replace(/\bLearn how to fix this (?:error|warning)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function parseCompilerCard(row, groupSummary) {
+    const rowText = fullText(row);
+    const badge = parseBadgeInfo(rowText);
+    const body = stripBadgeAndNoise(compilerCardMessage(row), '');
+    if (!body || body.length > 2_000) return null;
+
+    const split = splitMessageFromSnippet(body);
+    const message = split.snippet ? `${split.message} (near \`${split.snippet}\`)` : split.message;
+    if (!message) return null;
+
+    let severity = badge?.severity || null;
+    if (!severity && groupSummary.errors > 0 && !(groupSummary.warnings > 0)) severity = 'error';
+    if (!severity && groupSummary.warnings > 0 && !(groupSummary.errors > 0)) severity = 'warning';
+    if (!severity) severity = inferSeverity(message);
+
+    return {
+      line: badge?.line ?? null,
+      column: null,
+      severity,
+      kind: 'typst',
+      original: null,
+      suggestion: null,
+      message
+    };
+  }
+
+  function extractCompilerPanel(doc, cutoff) {
+    const panel = findImprovePanel(doc, cutoff);
+    if (!panel) {
+      return {
+        panelFound: false,
+        explicitEmpty: false,
+        summaryFound: false,
+        reportedErrors: null,
+        reportedWarnings: null,
+        diagnostics: []
+      };
+    }
+
+    if (hasExplicitEmptyState(panel)) {
+      return {
+        panelFound: true,
+        explicitEmpty: true,
+        summaryFound: true,
+        reportedErrors: 0,
+        reportedWarnings: 0,
+        diagnostics: []
+      };
+    }
+
+    const groups = findCompilerGroups(panel);
+    const diagnostics = [];
+    let reportedErrors = null;
+    let reportedWarnings = null;
+
+    for (const group of groups) {
+      if (group.summary.errors != null) {
+        reportedErrors = (reportedErrors || 0) + group.summary.errors;
+      }
+      if (group.summary.warnings != null) {
+        reportedWarnings = (reportedWarnings || 0) + group.summary.warnings;
+      }
+      if (!group.list) continue;
+
+      const rows = group.list.querySelectorAll('[role="listitem"]');
+      for (let i = 0; i < rows.length; i++) {
+        if (!inLeftSidebar(rows[i], cutoff)) continue;
+        const diagnostic = parseCompilerCard(rows[i], group.summary);
+        if (diagnostic) diagnostics.push(diagnostic);
+      }
+    }
+
+    return {
+      panelFound: true,
+      explicitEmpty: false,
+      summaryFound: groups.length > 0,
+      reportedErrors,
+      reportedWarnings,
+      diagnostics
+    };
+  }
+
+  function diagnosticKey(diagnostic) {
+    const message = String(diagnostic?.message || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 300);
+    return `${diagnostic?.line ?? 'project'}|${diagnostic?.kind || 'typst'}|${message}`;
+  }
+
+  function dedupeDiagnostics(diagnostics) {
     const seen = new Set();
-    return out.filter(d => {
-      const key = `${d.line}|${(d.message || '').slice(0, 200)}`;
+    return diagnostics.filter(diagnostic => {
+      const key = diagnosticKey(diagnostic);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
   }
 
+  function summaryPlaceholder(severity, index, missing, reported) {
+    const noun = `${severity}${reported === 1 ? '' : 's'}`;
+    const detail = missing === 1
+      ? `one ${severity}'s details are not visible`
+      : `${severity} ${index + 1} of ${missing} has no visible details`;
+    return {
+      line: null,
+      column: null,
+      severity,
+      kind: 'typst-summary',
+      original: null,
+      suggestion: null,
+      message: `The Improve panel reports ${reported} compiler ${noun}, but ${detail}.`
+    };
+  }
+
+  function extractDiagnosticsState(doc) {
+    const cutoff = viewportCutoff(doc);
+    const lineDiagnostics = extractLineDiagnostics(doc, cutoff);
+    const compilerPanel = extractCompilerPanel(doc, cutoff);
+    const diagnostics = dedupeDiagnostics([...lineDiagnostics, ...compilerPanel.diagnostics]);
+
+    const compilerRows = diagnostics.filter(d => d.kind !== 'spelling' && d.kind !== 'typst-status');
+    const parsedErrors = compilerRows.filter(d => d.severity === 'error').length;
+    const parsedWarnings = compilerRows.filter(d => d.severity === 'warning').length;
+
+    const addMissing = (severity, reported, parsed) => {
+      if (!Number.isInteger(reported) || reported <= parsed) return;
+      const missing = Math.min(200 - diagnostics.length, reported - parsed);
+      for (let i = 0; i < missing; i++) {
+        diagnostics.push(summaryPlaceholder(severity, i, missing, reported));
+      }
+    };
+    addMissing('error', compilerPanel.reportedErrors, parsedErrors);
+    addMissing('warning', compilerPanel.reportedWarnings, parsedWarnings);
+
+    // A mounted panel without any recognizable compiler summary is not proof
+    // of a clean document. Surface parser uncertainty instead of silently
+    // turning a future typst.app markup change into a false CLEAN result.
+    if (compilerPanel.panelFound && !compilerPanel.summaryFound && !compilerRows.length) {
+      diagnostics.push({
+        line: null,
+        column: null,
+        severity: 'warning',
+        kind: 'typst-status',
+        original: null,
+        suggestion: null,
+        message: 'The Improve panel is open, but its compiler status could not be verified. Reopen the panel and read diagnostics again.'
+      });
+    }
+
+    return { cutoff, lineDiagnostics, compilerPanel, diagnostics: dedupeDiagnostics(diagnostics) };
+  }
+
+  function extractDiagnostics(doc) {
+    return extractDiagnosticsState(doc).diagnostics;
+  }
+
   root.__typstAgentImproveExtract = extractDiagnostics;
 
   /** Diagnostic hook the dev console can call to debug the parser. */
   root.__typstAgentImproveDebug = function () {
-    const cutoff = viewportCutoff(document);
+    const state = extractDiagnosticsState(document);
+    const { cutoff } = state;
     const badges = findLineBadges(document, cutoff);
-    const results = extractDiagnostics(document);
+    const results = state.diagnostics;
     return {
       cutoff,
+      panelFound: state.compilerPanel.panelFound,
+      explicitEmpty: state.compilerPanel.explicitEmpty,
+      summaryFound: state.compilerPanel.summaryFound,
+      reportedErrors: state.compilerPanel.reportedErrors,
+      reportedWarnings: state.compilerPanel.reportedWarnings,
       badgeCount: badges.length,
       badgeTexts: badges.map(b => ownText(b)),
       badgeInfo: badges.map(b => parseBadgeInfo(ownText(b))),

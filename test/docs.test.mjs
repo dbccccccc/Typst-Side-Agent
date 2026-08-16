@@ -4,10 +4,17 @@ import { readFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { DOC_TOPICS, listDocTopics, resolveTopicId } from '../src/background/docs.js';
+import {
+  DOCS_REVIEWED_DATE,
+  DOCS_TYPST_VERSION,
+  DOC_TOPICS,
+  listDocTopics,
+  resolveTopicId
+} from '../src/background/docs.js';
 import { BUILTIN_TOOLS } from '../src/background/tools.js';
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const VERSION_BANNER = '> Applies to **Typst 0.15.1** (reviewed 2026-08-08).';
 
 // ---------- DOC_TOPICS integrity ----------
 
@@ -23,6 +30,11 @@ test('DOC_TOPICS: topic ids and files are unique', () => {
   const files = DOC_TOPICS.map(t => t.file);
   assert.equal(new Set(ids).size, ids.length, 'ids unique');
   assert.equal(new Set(files).size, files.length, 'files unique');
+});
+
+test('bundled docs: target version and review date are explicit', () => {
+  assert.equal(DOCS_TYPST_VERSION, '0.15.1');
+  assert.equal(DOCS_REVIEWED_DATE, '2026-08-08');
 });
 
 test('listDocTopics: returns id + title + summary for every topic', () => {
@@ -79,6 +91,7 @@ test('BUILTIN_TOOLS: read_typst_docs is registered with a topic parameter', () =
   assert.equal(tool.function.parameters.type, 'object');
   assert.ok(tool.function.parameters.properties.topic, 'has topic param');
   assert.equal(tool.function.parameters.properties.topic.type, 'string');
+  assert.match(tool.function.description, /Typst 0\.15\.1/);
 });
 
 // ---------- Bundled markdown sanity ----------
@@ -88,5 +101,30 @@ test('bundled docs: every file has a level-1 heading', async () => {
     const abs = path.join(REPO_ROOT, 'docs', 'typst', topic.file);
     const content = await readFile(abs, 'utf8');
     assert.ok(content.trim().startsWith('# '), `${topic.file} starts with # heading`);
+  }
+});
+
+test('bundled docs: every topic carries the current version banner', async () => {
+  for (const topic of DOC_TOPICS) {
+    const abs = path.join(REPO_ROOT, 'docs', 'typst', topic.file);
+    const content = await readFile(abs, 'utf8');
+    assert.ok(content.includes(VERSION_BANNER), `${topic.file} has the current version banner`);
+  }
+});
+
+test('bundled docs: README records official 0.15 provenance', async () => {
+  const content = await readFile(path.join(REPO_ROOT, 'docs', 'typst', 'README.md'), 'utf8');
+  assert.match(content, /Target: \*\*Typst 0\.15\.1\*\*/);
+  assert.match(content, /https:\/\/typst\.app\/docs\/changelog\/0\.15\.0\//);
+  assert.match(content, /https:\/\/typst\.app\/docs\/changelog\/0\.15\.1\//);
+});
+
+test('bundled docs: removed or invalid pre-0.15 examples do not return', async () => {
+  const contents = await Promise.all(DOC_TOPICS.map(topic =>
+    readFile(path.join(REPO_ROOT, 'docs', 'typst', topic.file), 'utf8')
+  ));
+  const combined = contents.join('\n');
+  for (const stale of ['$$', 'calc.mod(', '#hr()', 'layout did not converge within 5 attempts']) {
+    assert.ok(!combined.includes(stale), `does not contain stale snippet: ${stale}`);
   }
 });

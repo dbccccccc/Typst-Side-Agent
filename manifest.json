@@ -23,7 +23,10 @@
   "content_scripts": [
     {
       "matches": ["https://typst.app/*"],
-      "js": ["src/content/isolated.js"],
+      "js": [
+        "src/content/bridge-protocol.js",
+        "src/content/isolated.js"
+      ],
       "run_at": "document_start"
     }
   ],
@@ -48,8 +51,10 @@
     {
       "resources": [
         "src/content/main.js",
+        "src/content/bridge-protocol.js",
         "src/content/workspace.js",
-        "src/content/diagnostics.js"
+        "src/content/diagnostics.js",
+        "src/content/float-controller.js"
       ],
       "matches": ["https://typst.app/*"]
     }

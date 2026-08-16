@@ -1,5 +1,7 @@
 # Typst Context & Introspection
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Context system, counters, states, queries, and document introspection.
 
 ---
@@ -58,7 +60,7 @@ Context blocks can be nested. Inner context takes precedence:
 
 ### Compiler Iterations
 
-Typst compiles documents up to 5 times to resolve context. Warning `"layout did not converge within 5 attempts"` signals excessive iteration.
+Typst compiles documents up to five times to resolve context. The warning `"document did not converge within five attempts"` signals excessive iteration. Typst 0.15 adds more detailed diagnostics to help identify the contextual expression responsible.
 
 ---
 
@@ -83,7 +85,7 @@ counter(key: str|element|function) -> counter
 | Method | Description |
 |--------|-------------|
 | `counter.get()` | Current value as array of integers |
-| `counter.display(numbering, both)` | Display with numbering pattern |
+| `counter.display(numbering: auto, at: auto, both: false)` | Display a value at the current or specified location |
 | `counter.at(selector)` | Value at specific location |
 | `counter.final()` | Final value after all pages |
 | `counter.step(level: 1)` | Increment by 1 |
@@ -102,6 +104,9 @@ counter(key: str|element|function) -> counter
 
 // Get value at label
 #context counter(heading).at(<intro>)
+
+// Display the heading counter at a label
+#context counter(heading).display("1.", at: <intro>)
 ```
 
 ---
@@ -157,6 +162,9 @@ Requires `context`.
 // Elements before current position
 #context query(selector(heading).before(here()))
 
+// Strong elements nested inside lists (Typst 0.15)
+#context query(selector(strong).within(list))
+
 // By label
 #context query(<intro>)
 
@@ -170,6 +178,8 @@ Requires `context`.
   }
 }
 ```
+
+`selector.within(ancestor)` is introspection-only; it is not valid as the selector of a show rule.
 
 ---
 
@@ -222,6 +232,8 @@ metadata(value: any) -> content
 
 // CLI: typst query doc.typ "<chapter-marker>" --field value
 ```
+
+Typst 0.15 introduces `typst eval`, which supersedes the older `typst query` CLI workflow for machine-readable evaluation. Existing `typst query` commands remain useful when maintaining older scripts.
 
 ---
 

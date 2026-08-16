@@ -1,5 +1,7 @@
 # Typst Data Loading
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Loading external data: CSV, JSON, XML, YAML, TOML, CBOR, and plain text.
 
 ---
@@ -10,7 +12,7 @@ Read structured data from a CSV file.
 
 ```typc
 csv(
-  source: str|bytes,
+  source: str|path|bytes,
   delimiter: str = ",",
   row-type: type = array,       // array or dictionary
 ) -> array
@@ -40,7 +42,7 @@ Returns a 2D array of strings (each row is an array of strings).
 Read/write JSON data.
 
 ```typc
-json(source: str|bytes) -> any
+json(source: str|path|bytes) -> any
 json.encode(value, pretty: false) -> str
 ```
 
@@ -72,7 +74,7 @@ Weather: #day.weather
 Read XML data.
 
 ```typc
-xml(source: str|bytes) -> array
+xml(source: str|path|bytes) -> array
 ```
 
 Returns array of dictionaries, each with:
@@ -88,6 +90,8 @@ Returns array of dictionaries, each with:
 #root.children
 ```
 
+Typst 0.15 adds XML namespace support. The public entry point remains `xml(source)`; namespace-aware input is handled by the parser without a separate namespace parameter.
+
 ---
 
 ## yaml
@@ -95,7 +99,7 @@ Returns array of dictionaries, each with:
 Read/write YAML data.
 
 ```typc
-yaml(source: str|bytes) -> any
+yaml(source: str|path|bytes) -> any
 yaml.encode(value) -> str
 ```
 
@@ -121,7 +125,7 @@ yaml.encode(value) -> str
 Read/write TOML data.
 
 ```typc
-toml(source: str|bytes) -> dictionary
+toml(source: str|path|bytes) -> dictionary
 toml.encode(value, pretty: false) -> str
 ```
 
@@ -148,7 +152,7 @@ Authors: #(details.authors.join(", "))
 Read/write CBOR binary data.
 
 ```typc
-cbor(source: str|bytes) -> any
+cbor(source: str|path|bytes) -> any
 cbor.encode(value) -> bytes
 ```
 
@@ -170,7 +174,7 @@ cbor.encode(value) -> bytes
 Read plain text or raw bytes from any file.
 
 ```typc
-read(path: str, encoding: "utf8"|none) -> str|bytes
+read(path: str|path, encoding: "utf8"|none) -> str|bytes
 ```
 
 ```typst
@@ -180,6 +184,15 @@ read(path: str, encoding: "utf8"|none) -> str|bytes
 
 // Read raw bytes
 #let bytes = read("image.jpg", encoding: none)
+```
+
+### Decoding Bytes in 0.15
+
+The old scoped decoder functions were removed. Pass bytes directly to the top-level data function:
+
+```typst
+#let bytes = read("payload.json", encoding: none)
+#let data = json(bytes)        // not json.decode(bytes)
 ```
 
 ---
@@ -214,14 +227,19 @@ read(path: str, encoding: "utf8"|none) -> str|bytes
 
 ## File Path Rules
 
-| Path Type | Prefix | Resolves From |
-|-----------|--------|---------------|
-| Relative | (none) | Current .typ file |
-| Absolute | `/` | Project root |
-| Package | `@pkg/` | Package directory |
+| Path form | Example | Resolves from |
+|-----------|---------|---------------|
+| Relative string | `"data/config.json"` | Current `.typ` file |
+| Absolute string | `"/shared/config.json"` | Project root |
+| Path value | `path("data/config.json")` | The source file that created the value |
 
 ```typst
 #image("img/logo.png")       // relative
-#image("/assets/logo.png")    // project root
-#json("@preview/mypkg/data.json")  // package file
+#image("/assets/logo.png")   // project root
+#let config = path("data/config.json")
+#json(config)
 ```
+
+- Use forward slashes on every platform; backslashes are rejected as path separators in Typst 0.15
+- A package can export a `path(...)` value created inside the package, and the path keeps that package-relative origin for callers
+- URLs are not file paths; fetch remote data before compiling and pass it as bytes or a project file

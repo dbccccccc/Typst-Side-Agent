@@ -9,9 +9,41 @@ export const BUILTIN_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'read_file_structure',
+      description:
+        'Read the names and visible hierarchy currently rendered in the Typst Files sidebar. If the Files sidebar is not open, this call pauses and asks the user to open it, then rechecks the page. This reads names only, never file contents. Contents of collapsed folders are unavailable; ask the user to expand folders and call this tool again when their children are needed.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'open_project_file',
+      description:
+        'Ask the user to open one exact project-relative file in the originating Typst Files sidebar. The call pauses until that exact breadcrumb path is open and Typst exposes its text editor to the agent. On success, subsequent read_document and editor tools in this response target that file. Use this before reading or editing a file other than the one currently open, and wait for its result before issuing those document tools or requesting another file. This tool cannot expose binary or preview-only assets as editable text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Exact project-relative path obtained from read_file_structure, for example "chapters/intro.typ" or "references/ref.bib".'
+          }
+        },
+        required: ['path'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'read_document',
       description:
-        'Fetch the current Typst editor source plus a workspace UI snapshot (preview/asset path, file-tree hints). Numbered lines look like "  N|line text"; the "N|" prefix is metadata, not source. By default returns the start of the document up to max_chars. Pass start_line / end_line (1-indexed, inclusive) to read a specific range — the response includes approx_line_count so you can page further.',
+        'Fetch source from the Typst project file that was open when the user sent the latest message. Numbered lines look like "  N|line text"; the "N|" prefix is metadata, not source. By default returns the start of the document up to max_chars. Pass start_line / end_line (1-indexed, inclusive) to read a specific range — the response includes approx_line_count so you can page further. If the user opens another file, this call pauses until they return to the message file.',
       parameters: {
         type: 'object',
         properties: {
@@ -36,16 +68,11 @@ export const BUILTIN_TOOLS = [
     function: {
       name: 'read_diagnostics',
       description:
-        'Read current diagnostics the same way as + Add → Diagnostics: merged Improve-sidebar messages with CodeMirror lint positions. Each entry has severity ("error" | "warning" | "info") and kind ("typst" for compiler output, "spelling" for spellchecker suggestions). Response also includes disjoint error_count / warning_count / spelling_count so you can tell compiler problems from advisory spelling fixes at a glance. By default reads immediately; optionally wait so typst.app can recompile after your edits.',
+        `Read fresh diagnostics from the originating Typst tab after an initial ${LIMITS.DIAGNOSTICS_SETTLE_DELAY_MS} ms compiler-settling delay and bounded stability checks. Merges project-level and line-level Improve-sidebar messages with CodeMirror lint positions; project-level rows have line: null. Kinds are "typst" (visible compiler detail), "typst-summary" (reported compiler item whose detail is unavailable), "typst-status" (status could not be verified), and "spelling". Response includes disjoint error_count / warning_count / spelling_count / status_count. Call with an empty object; timing is not model-configurable.`,
       parameters: {
         type: 'object',
-        properties: {
-          delay_ms: {
-            type: 'integer',
-            description:
-              'Milliseconds to wait before reading (default 0; max 4000). Use a short non-zero delay only if you just edited and need fresher compiler output.'
-          }
-        }
+        properties: {},
+        additionalProperties: false
       }
     }
   },
@@ -54,7 +81,7 @@ export const BUILTIN_TOOLS = [
     function: {
       name: 'read_typst_docs',
       description:
-        'Look up bundled Typst language / grammar reference docs. Call this whenever you are unsure about Typst syntax, a function signature, the right set/show rule, math symbol, or idiomatic pattern. Call with NO "topic" argument to get the topic index (id + one-line summary of each); call with "topic" (e.g. "markup", "math", "scripting", or "1".."12") to read that topic as markdown.',
+        'Look up bundled Typst 0.15.1 language / grammar reference docs. Call this whenever you are unsure about Typst syntax, a function signature, the right set/show rule, math symbol, or idiomatic pattern. Call with NO "topic" argument to get the target version and topic index (id + one-line summary of each); call with "topic" (e.g. "markup", "math", "scripting", or "1".."12") to read that topic as markdown.',
       parameters: {
         type: 'object',
         properties: {
@@ -156,37 +183,16 @@ export const BUILTIN_TOOLS = [
   }
 ];
 
-/** Tool names that the page (content-main) executes. */
-export const PAGE_TOOL_NAMES = new Set([
-  'replace_lines',
-  'search_replace',
-  'patch_document',
-  'insert_at_cursor',
-  'replace_selection'
-]);
-
-/** Convert a custom-tool record into an OpenAI-style tool spec. */
-export function customToolToSpec(tool) {
-  return {
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description || `Custom tool: ${tool.name}`,
-      parameters: tool.parameters || { type: 'object', properties: {} }
-    }
-  };
-}
-
-/** Convert an MCP tool record into an OpenAI-style tool spec, scoped by server name. */
-export function mcpToolToSpec(serverId, serverName, tool) {
-  const safeServer = String(serverName || serverId).replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 24);
-  const safeTool = String(tool.name).replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 48);
-  return {
-    type: 'function',
-    function: {
-      name: `mcp__${safeServer}__${safeTool}`,
-      description: tool.description ? `[MCP ${serverName}] ${tool.description}` : `[MCP ${serverName}] ${tool.name}`,
-      parameters: tool.inputSchema || { type: 'object', properties: {} }
-    }
-  };
-}
+/** Trusted, source-owned effect metadata. Model output can never override it. */
+export const BUILTIN_TOOL_METADATA = Object.freeze({
+  read_file_structure: Object.freeze({ effect: 'read', approval: 'automatic', destination: 'visible Typst Files sidebar' }),
+  open_project_file: Object.freeze({ effect: 'read', approval: 'automatic', destination: 'originating Typst Files sidebar' }),
+  read_document: Object.freeze({ effect: 'read', approval: 'automatic', destination: 'active Typst editor file' }),
+  read_diagnostics: Object.freeze({ effect: 'read', approval: 'automatic', destination: 'typst.app diagnostics' }),
+  read_typst_docs: Object.freeze({ effect: 'read', approval: 'automatic', destination: 'bundled Typst reference' }),
+  replace_lines: Object.freeze({ effect: 'editor-write', approval: 'once', destination: 'originating Typst editor' }),
+  search_replace: Object.freeze({ effect: 'editor-write', approval: 'once', destination: 'originating Typst editor' }),
+  patch_document: Object.freeze({ effect: 'editor-write', approval: 'once', destination: 'originating Typst editor' }),
+  insert_at_cursor: Object.freeze({ effect: 'editor-write', approval: 'once', destination: 'originating Typst editor' }),
+  replace_selection: Object.freeze({ effect: 'editor-write', approval: 'once', destination: 'originating Typst editor' })
+});

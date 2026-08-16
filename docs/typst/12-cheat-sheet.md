@@ -1,5 +1,7 @@
 # Typst Cheat Sheet
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Quick reference for the most common syntax and patterns.
 
 ---
@@ -47,7 +49,8 @@ Body text with *bold* and _italic_.
 | Math inline | `$x^2$` |
 | Math block | `$ x^2 $` |
 | Comment | `// line` or `/* block */` |
-| Horizontal rule | `#line(length: 100%)` |
+| Thematic divider | `#divider()` |
+| Decorative rule | `#line(length: 100%)` |
 | Non-breaking space | `~` |
 | Em dash | `---` |
 | En dash | `-` |
@@ -58,12 +61,13 @@ Body text with *bold* and _italic_.
 
 ```typst
 // Page
-#set page(paper: "a4", margin: 1in)
+#set page(paper: "a4", margin: 1in, bleed: 3mm)
 #set page(header: [Header], footer: context [#h(1fr)#counter(page).display()])
 
 // Text
 #set text(font: "Libertinus Serif", size: 11pt, lang: "en")
 #set text(fill: navy)
+#set text(variations: ("wght": 550)) // variable-font axis
 
 // Paragraph
 #set par(justify: true, first-line-indent: 1em, spacing: 0.65em)
@@ -73,6 +77,7 @@ Body text with *bold* and _italic_.
 
 // List
 #set list(marker: ([•], [‣], [–]))
+#set list(marker-align: end)
 #set enum(numbering: "a)")
 ```
 
@@ -133,6 +138,7 @@ Body text with *bold* and _italic_.
 #let y = if x > 0 { "positive" } else { "non-positive" }
 
 #for i in range(5) { [#i] }
+#range(1, 5, inclusive: true) // (1, 2, 3, 4, 5)
 #for (k, v) in dict { [#k = #v \n] }
 
 #let n = 1
@@ -241,6 +247,10 @@ $
 
 // Query document
 #context query(heading.where(level: 1)).len()
+#context query(selector(strong).within(list))
+
+// Display a counter at another location
+#context counter(heading).display("1.", at: <intro>)
 
 // State
 #let s = state("key", 0)
@@ -262,6 +272,12 @@ $
 #rect(fill: rgb("#1E90FF"))
 #rect(fill: cmyk(0%, 100%, 50%, 0%))
 #text(fill: gradient.linear(red, blue))[Gradient]
+#text(fill: gradient.linear(..color.map.coolwarm))[Cool-to-warm]
+
+// Spot ink and tiling offset (0.15)
+#let ink = color.spot("Brand Blue", rgb("#239dad"))
+#rect(fill: ink.tint(70%))
+#rect(fill: tiling(size: (10pt, 10pt), offset: (5pt, 5pt))[#circle(radius: 1pt)])
 
 // Lighten / darken
 #rect(fill: red.lighten(50%))
@@ -281,7 +297,20 @@ $
 #let csv = csv("data.csv")
 #let config = yaml("config.yaml")
 #let text = read("file.txt")
+#let file = path("data.json") // retains this file's origin
+#let raw = read("data.json", encoding: none)
+#let decoded = json(raw)      // bytes go directly to the decoder
 ```
+
+---
+
+## Typst 0.15 Migration
+
+- Use `/` in paths on every platform; backslashes are no longer accepted as separators
+- Use the foundations `path("file")` type for file references that cross modules or package boundaries
+- Replace the old drawing `path` element with `curve`, `pattern` with `tiling`, and `pdf.embed` with `pdf.attach`
+- Pass bytes to `json`, `yaml`, `toml`, `xml`, `csv`, or `cbor`; scoped `*.decode` functions were removed
+- Review manual baseline offsets and relative `math.lr` / `math.stretch` sizing because 0.15 changed their layout behavior
 
 ---
 
@@ -295,7 +324,8 @@ $
 | `content does not contain field` | Use `.fields()` to inspect |
 | `cannot mutate` | Some values are immutable; use `state()` |
 | `context is not available` | Wrap in `#context { .. }` |
-| `layout did not converge` | Excessive state/counter dependencies |
+| `document did not converge within five attempts` | Inspect contextual state/counter dependencies; 0.15 diagnostics identify the likely cause |
+| file path contains `\` | Replace path separators with `/` |
 
 ---
 

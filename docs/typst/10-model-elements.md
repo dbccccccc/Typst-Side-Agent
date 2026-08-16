@@ -1,5 +1,7 @@
 # Typst Model Elements
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Document structure elements: document metadata, headings, figures, tables, footnotes, outlines.
 
 ---
@@ -10,10 +12,13 @@ Root element with metadata.
 
 ```typc
 document(
+  path: str,
+  format: auto|str,
   title: none|content,
   author: array,
   keywords: array,
   date: none|auto|datetime,
+  body: content,
 ) -> content
 ```
 
@@ -24,6 +29,26 @@ document(
   keywords: ("typst", "typesetting"),
   date: datetime.today(),
 )
+```
+
+The normal root document is configured with `#set document(...)`. Typst 0.15 also makes `document` constructible with an output path and format for multi-document bundles:
+
+```typst
+#document("index.html", format: "html")[
+  #title[Bundle home]
+]
+```
+
+### Bundle Assets
+
+The experimental `asset` element adds a string or byte resource to a bundle.
+
+```typc
+asset(path: str, data: str|bytes) -> content
+```
+
+```typst
+#asset("styles.css", read("styles.css"))
 ```
 
 ---
@@ -37,6 +62,26 @@ Creates a proper document title (distinct from a heading).
 ```
 
 Turns into `<h1>` in HTML export. A top-level heading indicates a section, not the document title.
+
+---
+
+## Divider
+
+A semantic thematic break introduced in Typst 0.15.
+
+```typc
+divider() -> content
+```
+
+```typst
+First topic.
+
+#divider()
+
+Next topic.
+```
+
+Use `line` instead when the rule is purely decorative.
 
 ---
 
@@ -108,7 +153,7 @@ table(
   rows: auto|int|array,
   column-gutter: auto|...array,
   row-gutter: auto|...array,
-  fill: none|color|gradient|pattern|function,
+  fill: none|color|gradient|tiling|function,
   align: auto|alignment|array|function,
   stroke: none|...function,
   inset: length|dictionary,
@@ -242,9 +287,12 @@ numbering(pattern: str|function, ..numbers) -> content|str
 
 ```typc
 bibliography(
-  path: str|array,
+  sources: str|path|bytes|array,
   title: content|auto|none,
-  style: str,
+  full: bool,
+  style: auto|str|bytes,
+  target: auto|str,
+  group: auto|str,
 ) -> content
 ```
 
@@ -253,6 +301,8 @@ bibliography(
 #bibliography("refs.bib", style: "apa")
 #bibliography(("refs.bib", "more.bib"), title: [References])
 ```
+
+Typst 0.15 supports multiple bibliographies in one document. `target` and `group` coordinate which citations belong to each bibliography, while `full: true` includes uncited entries.
 
 ### Cite
 
@@ -302,6 +352,7 @@ Plato said #quote[I know that I know nothing].
 ```typst
 // 1. Add a label
 = Introduction <intro>
+#set math.equation(numbering: "(1)")
 $ E = mc^2 $ <einstein>
 #figure(..., caption: [...]) <fig:chart>
 
@@ -335,3 +386,4 @@ $ E = mc^2 $ <einstein>
 | `<label>` | `label("label")` |
 | `@label` | `ref(<label>)` |
 | `#footnote[...]` | `footnote[...]` |
+| Thematic break | `divider()` |

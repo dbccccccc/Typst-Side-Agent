@@ -2,16 +2,203 @@
  * typst.app workspace / file UI heuristics (MAIN world).
  *
  * Detects when the center column shows an asset detail (Path, Format, …) versus
- * the Typst canvas, and gathers file-tree hints so the agent knows which file
- * the user is focused on.
+ * the Typst canvas, and gathers bounded workspace hints. Callers can omit the
+ * exact visible tree; normal model messages discard it and tools consume it
+ * only through the identity workspace response.
  *
  * Exposes globalThis.__typstAgentWorkspaceExtract.
  */
 (function (root) {
   'use strict';
 
-  const FILE_EXT_RE = /\.(typ|png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?|eot|bib|csv|md|txt|json|yml|yaml|wasm)$/i;
+  const FILE_EXT_RE = /\.(typ(?:st)?|png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?|eot|bib|csv|tsv|md|txt|json|toml|xml|yml|yaml|wasm)$/i;
   const KNOWN_FOLDER_NAMES = /^(fonts|images|src|assets|lib|figures|data|sections|chapters)$/i;
+  const PROJECT_FILE_RE = /\.[a-z0-9][a-z0-9+_-]{0,31}$/i;
+  const MAX_PROJECT_TREE_ENTRIES = 128;
+  const MAX_PROJECT_TREE_DEPTH = 12;
+
+  function cleanInlineText(value, max = 240) {
+    return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : '';
+  }
+
+  function normalizeProjectRelativePath(value) {
+    if (typeof value !== 'string') return null;
+    let path = value.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+    path = path.replace(/\/{2,}/g, '/');
+    if (!path || path.length > 240 || /^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+    const segments = path.split('/').map(segment => segment.trim());
+    if (segments.some(segment => !segment || segment === '.' || segment === '..' || /[\0\r\n]/.test(segment))) return null;
+    if (!PROJECT_FILE_RE.test(segments[segments.length - 1] || '')) return null;
+    return segments.join('/');
+  }
+
+  function activeFileRecord(relativePath, projectLabel, source, confidence) {
+    const path = normalizeProjectRelativePath(relativePath);
+    if (!path) return null;
+    return {
+      projectLabel: cleanInlineText(projectLabel, 160) || null,
+      relativePath: path,
+      basename: path.split('/').pop(),
+      source,
+      confidence
+    };
+  }
+
+  function elementPathAttribute(element) {
+    for (let node = element, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
+      for (const attr of ['data-path', 'data-file', 'data-relpath', 'title']) {
+        const path = normalizeProjectRelativePath(node.getAttribute?.(attr));
+        if (path) return path;
+      }
+    }
+    return null;
+  }
+
+  function safeRect(element) {
+    try { return element?.getBoundingClientRect?.() || null; } catch { return null; }
+  }
+
+  function isInTopHeader(element, doc, allowContainer = false) {
+    const rect = safeRect(element);
+    if (!rect) return false;
+    const win = doc.defaultView || window;
+    const viewportWidth = win.innerWidth || 1600;
+    const maxBottom = 112;
+    if (rect.width < 2 || rect.height < 2 || rect.top < -12 || rect.top > maxBottom || rect.bottom > maxBottom + 20) return false;
+    if (allowContainer && (rect.width > Math.min(1100, viewportWidth * 0.82) || rect.height > 100)) return false;
+    return true;
+  }
+
+  function breadcrumbLeafTexts(container) {
+    const nodes = [container];
+    try {
+      nodes.push(...container.querySelectorAll('a, button, span, strong, b, [role="link"], [role="button"], [aria-current]'));
+    } catch { /* an unusual page node is not queryable */ }
+    const out = [];
+    for (const node of nodes) {
+      const text = cleanInlineText(node?.textContent, 180);
+      if (!text || /^[>›❯»/|]+$/.test(text) || /[\r\n]/.test(text)) continue;
+      const children = Array.from(node?.children || []);
+      if (children.some(child => cleanInlineText(child.textContent, 180) === text)) continue;
+      const pieces = text.split(/\s*[>›❯»]\s*/).map(part => cleanInlineText(part, 160)).filter(Boolean);
+      if (node === container && pieces.length > 1) return pieces.slice(0, 16);
+      if (node === container && children.length > 0) continue;
+      for (const piece of pieces) {
+        if (out[out.length - 1] !== piece) out.push(piece);
+      }
+    }
+    return out.slice(0, 16);
+  }
+
+  function activeFileFromBreadcrumbSegments(segments, source = 'header_breadcrumb', confidence = 'high') {
+    const clean = (segments || []).map(segment => cleanInlineText(segment, 160)).filter(Boolean);
+    let fileIndex = -1;
+    for (let index = clean.length - 1; index >= 0; index--) {
+      if (PROJECT_FILE_RE.test(clean[index])) { fileIndex = index; break; }
+    }
+    if (fileIndex < 0) return null;
+    const throughFile = clean.slice(0, fileIndex + 1);
+    if (throughFile.length === 1) return activeFileRecord(throughFile[0], null, source, 'medium');
+    if (throughFile.length === 2) {
+      return activeFileRecord(throughFile[1], throughFile[0], source, confidence);
+    }
+    // typst.app renders account/workspace › project › folders… › file.
+    // The account is not part of a project-relative file path.
+    return activeFileRecord(throughFile.slice(2).join('/'), throughFile[1], source, confidence);
+  }
+
+  function semanticHeaderBreadcrumbActiveFile(doc) {
+    let containers = [];
+    try {
+      containers = doc.querySelectorAll(
+        'header [role="heading"][aria-level="1"], [role="banner"] [role="heading"][aria-level="1"], header h1, [role="banner"] h1'
+      );
+    } catch { return null; }
+    for (const container of containers) {
+      if (!isInTopHeader(container, doc, true)) continue;
+      const record = activeFileFromBreadcrumbSegments(breadcrumbLeafTexts(container));
+      if (record) return record;
+    }
+    return null;
+  }
+
+  function headerBreadcrumbActiveFile(doc) {
+    const semantic = semanticHeaderBreadcrumbActiveFile(doc);
+    if (semantic) return semantic;
+    const selector = 'a, button, span, strong, b, [role="link"], [role="button"], [aria-current], [data-path], [data-file], [data-relpath]';
+    const candidates = [];
+    doc.querySelectorAll(selector).forEach(element => {
+      const text = cleanInlineText(element.textContent, 220);
+      if (!text || !PROJECT_FILE_RE.test(text) || /[\r\n<>]/.test(text) || !isInTopHeader(element, doc)) return;
+      const rect = safeRect(element);
+      const win = doc.defaultView || window;
+      const center = (rect.left + rect.right) / 2;
+      candidates.push({ element, text, centerDistance: Math.abs(center - (win.innerWidth || 1600) / 2) });
+    });
+    candidates.sort((left, right) => left.centerDistance - right.centerDistance);
+
+    let basenameFallback = null;
+    for (const candidate of candidates.slice(0, 12)) {
+      const declaredPath = elementPathAttribute(candidate.element);
+      if (declaredPath) return activeFileRecord(declaredPath, null, 'header_declared_path', 'high');
+      for (let node = candidate.element, depth = 0; node && node !== doc.body && depth < 9; node = node.parentElement, depth++) {
+        if (!isInTopHeader(node, doc, true)) continue;
+        const record = activeFileFromBreadcrumbSegments(breadcrumbLeafTexts(node));
+        if (record?.relativePath.includes('/')) return record;
+        if (record && !basenameFallback) basenameFallback = record;
+      }
+      if (!basenameFallback) basenameFallback = activeFileRecord(candidate.text, null, 'header_filename', 'medium');
+    }
+    return basenameFallback;
+  }
+
+  function selectedTreeActiveFile(doc, filesPanelRoot) {
+    const root = filesPanelRoot || doc;
+    let selected = [];
+    try {
+      selected = root.querySelectorAll(
+        '[aria-selected="true"], [aria-current="page"], [aria-current="true"], button[class*="_active_"], [role="treeitem"][class*="_active_"]'
+      );
+    }
+    catch { return null; }
+    for (const element of selected) {
+      const declaredPath = elementPathAttribute(element);
+      if (declaredPath) return activeFileRecord(declaredPath, null, 'selected_tree_path', 'high');
+      const text = cleanInlineText(element.textContent, 220);
+      if (text && PROJECT_FILE_RE.test(text) && !/[\r\n<>]/.test(text)) {
+        return activeFileRecord(text, null, 'selected_tree_filename', 'medium');
+      }
+    }
+    return null;
+  }
+
+  function bodyBreadcrumbActiveFile(bodyText) {
+    const compact = String(bodyText || '').replace(/[›❯»]/g, '>').replace(/\s+/g, ' ');
+    const pattern = /([^>]{1,160})>\s*((?:[^>]{1,160}>\s*)*?[^>]{1,160}\.[a-z0-9][a-z0-9+_-]{0,31})(?=\s|$)/ig;
+    for (const match of compact.matchAll(pattern)) {
+      const first = cleanInlineText(match[1], 160).split(/\s+/).filter(Boolean).pop();
+      const tail = match[2].split('>').map(part => cleanInlineText(part, 160)).filter(Boolean);
+      const record = activeFileFromBreadcrumbSegments([first, ...tail], 'body_breadcrumb', 'medium');
+      if (record) return record;
+    }
+    return null;
+  }
+
+  function documentTitleActiveFile(doc) {
+    const title = cleanInlineText(doc.title, 400);
+    const match = title.match(/^(.+?)\s+[–—-]\s+(.+?)\s+[–—-]\s+Typst$/i);
+    if (!match) return null;
+    return activeFileRecord(match[2], match[1], 'document_title', 'medium');
+  }
+
+  function resolveUniqueDeclaredPath(activeFile, declaredPaths) {
+    if (!activeFile || activeFile.relativePath.includes('/')) return activeFile;
+    const suffix = `/${activeFile.basename}`;
+    const matches = (declaredPaths || []).map(normalizeProjectRelativePath).filter(Boolean)
+      .filter(path => path === activeFile.basename || path.endsWith(suffix));
+    if (matches.length !== 1) return activeFile;
+    return activeFileRecord(matches[0], activeFile.projectLabel, 'unique_declared_path', 'high');
+  }
 
   function pickField(bodyText, label) {
     const re = new RegExp(label + ':\\s*\\n?\\s*([^\\n\\r]+)', 'i');
@@ -58,7 +245,7 @@
       if (tail) return 'fonts/' + tail.replace(/^\/+/, '');
     }
     const m2 = norm.match(
-      />\s*([\w.-]+(?:\/[\w.-]+)*\/[^\s>]+\.(?:png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?|typ))\b/i
+      />\s*([\w.-]+(?:\/[\w.-]+)*\/[^\s>]+\.(?:png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?))\b/i
     );
     if (m2 && m2[1]) return m2[1].trim();
     return null;
@@ -97,6 +284,13 @@
   }
 
   function findFilesPanelRoot(doc) {
+    try {
+      for (const region of doc.querySelectorAll('[role="region"]')) {
+        const heading = region.querySelector?.('[role="heading"], h1, h2, h3, h4, strong');
+        if (/^files$/i.test(cleanInlineText(heading?.textContent, 24)) && isVisiblePanel(region, doc)) return region;
+      }
+    } catch { /* fall through to geometry/text heuristics */ }
+
     const win = doc.defaultView || window;
     const vw = win.innerWidth || 1600;
     const heads = doc.querySelectorAll('span, div, h1, h2, h3, h4, button, p, label');
@@ -113,11 +307,113 @@
         const txt = (n.innerText || '').slice(0, 12000);
         const hasFile = FILE_EXT_RE.test(txt);
         if (!hasFile || txt.length > 20000) continue;
-        if (geo) return n;
-        if (noLayout && d < 8) return n;
+        if (geo && isVisiblePanel(n, doc)) return n;
+        if (noLayout && d < 8 && isVisiblePanel(n, doc)) return n;
       }
     }
     return null;
+  }
+
+  function isVisiblePanel(element, doc) {
+    if (!element) return false;
+    for (let node = element, depth = 0; node && depth < 12; node = node.parentElement, depth++) {
+      if (node.hidden || node.getAttribute?.('aria-hidden') === 'true') return false;
+      try {
+        const style = (doc.defaultView || window).getComputedStyle?.(node);
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) return false;
+      } catch { /* geometry remains the final visibility signal */ }
+    }
+    if (typeof element.getBoundingClientRect !== 'function') return true;
+    const rect = safeRect(element);
+    if (!rect || rect.width <= 1 || rect.height <= 1) return false;
+    const win = doc.defaultView || window;
+    const width = win.innerWidth || 1600;
+    const height = win.innerHeight || 900;
+    return rect.right > 0 && rect.bottom > 0 && rect.left < width && rect.top < height;
+  }
+
+  function directChildByTag(element, tagName) {
+    const upper = String(tagName || '').toUpperCase();
+    return Array.from(element?.children || []).find(child => child?.tagName === upper) || null;
+  }
+
+  function directTreeRows(container) {
+    return Array.from(container?.children || []).filter(child =>
+      child?.tagName === 'LI' || child?.getAttribute?.('role') === 'treeitem'
+    );
+  }
+
+  function directNestedTree(row) {
+    return Array.from(row?.children || []).find(child =>
+      child?.tagName === 'UL' || ['group', 'tree'].includes(child?.getAttribute?.('role'))
+    ) || null;
+  }
+
+  function primaryTreeButton(row) {
+    return directChildByTag(row, 'button') || (row?.getAttribute?.('role') === 'treeitem' ? row : null);
+  }
+
+  function looksLikeCollapsedFolderButton(button) {
+    let svg;
+    try { svg = button?.querySelector?.('svg'); } catch { return false; }
+    if (!svg) return false;
+    let paths;
+    try {
+      if (svg.querySelector?.('rect, circle, ellipse, line, polyline, polygon')) return false;
+      paths = Array.from(svg.querySelectorAll?.('path') || []);
+    } catch { return false; }
+    if (paths.length !== 1) return false;
+    const drawing = paths[0].getAttribute?.('d') || '';
+    const moves = drawing.match(/[Mm]/g) || [];
+    // The current Typst closed-folder glyph is a single closed curved outline.
+    // Fail to `unknown` if the icon changes instead of guessing that an entry is a file.
+    return moves.length === 1 && /[Cc]/.test(drawing) && /[Hh]/.test(drawing) &&
+      /[Vv]/.test(drawing) && /[Zz]\s*$/.test(drawing);
+  }
+
+  function cleanTreeEntryName(value) {
+    const name = cleanInlineText(value, 160);
+    if (!name || name === '.' || name === '..' || /[\\/\0\r\n]/.test(name)) return null;
+    return name;
+  }
+
+  function findProjectTreeRoot(filesPanelRoot) {
+    if (!filesPanelRoot) return null;
+    const candidates = [];
+    if (filesPanelRoot.tagName === 'UL' || filesPanelRoot.getAttribute?.('role') === 'tree') candidates.push(filesPanelRoot);
+    try { candidates.push(...filesPanelRoot.querySelectorAll('ul, [role="tree"]')); } catch { return null; }
+    return candidates.find(candidate => directTreeRows(candidate).length > 0) || null;
+  }
+
+  function extractProjectFileTree(filesPanelRoot) {
+    const rootList = findProjectTreeRoot(filesPanelRoot);
+    if (!rootList) return null;
+    const entries = [];
+    let truncated = false;
+
+    const scan = (list, parentPath, depth) => {
+      if (depth > MAX_PROJECT_TREE_DEPTH) { truncated = true; return; }
+      for (const row of directTreeRows(list)) {
+        if (entries.length >= MAX_PROJECT_TREE_ENTRIES) { truncated = true; return; }
+        const button = primaryTreeButton(row);
+        const name = cleanTreeEntryName(button?.innerText || button?.textContent);
+        if (!name) { truncated = true; continue; }
+        const path = parentPath ? `${parentPath}/${name}` : name;
+        if (path.length > 240) { truncated = true; continue; }
+        const nested = directNestedTree(row);
+        if (nested || looksLikeCollapsedFolderButton(button)) {
+          entries.push({ path, kind: 'folder', state: nested ? 'expanded' : 'collapsed' });
+          if (nested) scan(nested, path, depth + 1);
+        } else if (PROJECT_FILE_RE.test(name)) {
+          entries.push({ path, kind: 'file' });
+        } else {
+          entries.push({ path, kind: 'unknown' });
+        }
+      }
+    };
+
+    scan(rootList, '', 0);
+    return entries.length ? { source: 'files_panel_dom', entries, truncated } : null;
   }
 
   function collectLeafFilenamesIn(root) {
@@ -316,7 +612,7 @@
     return 'unknown_layout';
   }
 
-  function extract(doc) {
+  function extract(doc, options = {}) {
     const bodyText = doc.body?.innerText || '';
     const pathFromBody = pickField(bodyText, 'Path');
     let detail_path = pathFromBody || pickPathFromDom(doc);
@@ -328,9 +624,18 @@
     const selected_ui_hints = ariaSelectedTexts(doc);
     const focused_element_file_hint = focusAncestorFilenameHint(doc);
     const filesPanelRoot = findFilesPanelRoot(doc);
+    const project_file_tree = options?.includeProjectTree !== false
+      ? extractProjectFileTree(filesPanelRoot)
+      : null;
     const file_tree_filename_hints = mergeFileTreeFilenameHints(doc, filesPanelRoot);
     const file_tree_folder_hints = mergeFolderHints(filesPanelRoot, doc);
     const declaredPaths = collectDeclaredPathsIn(filesPanelRoot, doc);
+    let active_editor_file = headerBreadcrumbActiveFile(doc) || documentTitleActiveFile(doc) ||
+      selectedTreeActiveFile(doc, filesPanelRoot) || bodyBreadcrumbActiveFile(bodyText) ||
+      (focused_element_file_hint && PROJECT_FILE_RE.test(focused_element_file_hint)
+        ? activeFileRecord(focused_element_file_hint, null, 'focused_element', 'low')
+        : null);
+    active_editor_file = resolveUniqueDeclaredPath(active_editor_file, declaredPaths);
 
     let path_source = null;
     if (pathFromBody) path_source = 'body_text';
@@ -338,7 +643,7 @@
     if (!detail_path) {
       const fromCrumb = inferPathFromBreadcrumb(bodyText, focused_element_file_hint);
       if (fromCrumb) { detail_path = fromCrumb; path_source = 'breadcrumb'; }
-      else if (focused_element_file_hint && /\.(png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?|typ(st)?)$/i.test(focused_element_file_hint)) {
+      else if (focused_element_file_hint && /\.(png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?)$/i.test(focused_element_file_hint)) {
         detail_path = focused_element_file_hint;
         path_source = 'focused_filename';
       }
@@ -365,7 +670,7 @@
     }
 
     const file_tree_paths_guess = buildFileTreePathsGuess(
-      declaredPaths,
+      active_editor_file ? [...declaredPaths, active_editor_file.relativePath] : declaredPaths,
       file_tree_filename_hints,
       file_tree_folder_hints,
       detail_path
@@ -373,8 +678,9 @@
     if (file_tree_paths_guess.some(p => /[./]/.test(p) && p.includes('/'))) {
       notes += ' file_tree_paths_guess merges DOM path attributes with directory heuristics from detail_path / common folders — not a guaranteed project tree.';
     }
+    if (active_editor_file) notes += ` Active editor file: ${active_editor_file.relativePath} (${active_editor_file.source}, ${active_editor_file.confidence} confidence).`;
 
-    return {
+    const result = {
       preview_kind,
       detail_path,
       detail_path_source: path_source,
@@ -384,12 +690,16 @@
       detail_last_changed,
       canvas_max_pixel_area,
       selected_ui_hints,
+      active_editor_file,
+      files_panel_open: !!filesPanelRoot,
       focused_element_file_hint,
       file_tree_filename_hints,
       file_tree_folder_hints,
       file_tree_paths_guess,
       notes
     };
+    if (project_file_tree) result.project_file_tree = project_file_tree;
+    return result;
   }
 
   root.__typstAgentWorkspaceExtract = extract;

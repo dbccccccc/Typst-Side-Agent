@@ -1,248 +1,367 @@
-# Testing
+# Testing and release verification
 
-Typst Side Agent is a Chrome MV3 extension, which means some of it we can test with
-Node.js alone, and some of it only meaningfully exists inside a real browser
-against a real typst.app project. This document describes the full testing
-process, from fast pre-commit checks to the manual release checklist.
+Typst Side Agent combines pure modules, Chrome extension contexts, a
+main/isolated-world page bridge, streaming transports, and deterministic release
+packaging. The required gates cover each layer; a source-only smoke is not a
+substitute for the packaged-artifact test.
 
-The testing pyramid:
+## Prerequisites
 
-```
-   ┌─────────────────────────┐
-   │  Manual release QA      │   ~10 min, in Chrome against typst.app
-   ├─────────────────────────┤
-   │  Integration smoke      │   optional, CDP/puppeteer (not wired by default)
-   ├─────────────────────────┤
-   │  Unit tests (node:test) │   `npm test`, <1 s
-   ├─────────────────────────┤
-   │  Static checks          │   manifest shape, JS syntax, asset paths
-   └─────────────────────────┘
-```
+- Node.js 20.19 or newer (CI tests 20.19 and Node 22)
+- npm with a clean `npm ci`
+- Chrome, Edge, or a Playwright-installed Chromium for the browser smoke
 
----
-
-## 1. Static checks
-
-Run on every change. No extra dependencies, no network.
+Install exact development dependencies:
 
 ```bash
-npm run check      # node --check on every src/**/*.js (see scripts/check-syntax.mjs)
-npm test           # also runs the static.test.mjs suite
+npm ci
 ```
 
-`test/static.test.mjs` covers:
-
-- `manifest.json` is valid JSON, is Manifest V3, declares a module-type
-  service worker and a side panel.
-- Every path listed under `content_scripts[].js`, `background.service_worker`,
-  and `web_accessible_resources[].resources` actually exists on disk.
-- Every `src/**/*.js` file (excluding vendored bundles under `**/lib/**` and
-  `*.min.js`) parses cleanly with `node --check`.
-
-These tests catch the two most common "broke the extension" mistakes:
-**typos in manifest paths** and **syntax errors in a module that only loads
-inside Chrome**.
-
----
-
-## 2. Unit tests
-
-All the browser-independent logic lives in `src/background/` and is exercised
-from `test/`:
-
-| Suite                   | Covers                                                      |
-| ----------------------- | ----------------------------------------------------------- |
-| `test/agent.test.mjs`   | SSE reasoning-chunk extraction across vendor dialects, inline `<think>` splitter, tool-call ordering (`read_diagnostics` last, `replace_lines` bottom-up), session-title sanitiser. |
-| `test/context.test.mjs` | System-message composition (default prompt, custom tools, MCP section, vision fallback, selections), history compaction (no-op / truncation / floor), UI-field stripping for the API. |
-| `test/tools.test.mjs`   | Built-in registry invariants, custom-tool spec defaults, MCP namespacing / sanitisation / length caps. |
-| `test/mcp.test.mjs`     | `renderMcpContent` shape handling (text, resource, fallback JSON). |
-| `test/static.test.mjs`  | Static checks described above.                              |
-
-Run them:
+## Required source gate
 
 ```bash
-npm test
-npm run test:watch       # re-runs on save
+npm run verify
 ```
 
-The runner is the built-in `node --test` — zero dependencies. Target ≥ 80%
-coverage of the pure helpers. Things that require `fetch`, `chrome.*`, or the
-DOM are explicitly **out of scope** for unit tests.
+`verify` runs, in order:
 
-### When to add a unit test
+1. `npm run lint` — correctness-oriented ESLint rules for Node, browser, and
+   extension globals.
+2. `npm run check` — syntax checks for non-vendored source modules.
+3. `npm run check:imports` — missing imports, import cycles, raw protocol
+   dispatch literals, and the dependency-free shared-protocol leaf.
+4. `npm run vendor:verify` — exact Marked/DOMPurify source and provenance
+   verification.
+5. `npm run coverage` — all root Node suites under coverage, with focused line
+   floors for the agent, provider/MCP transports, storage/schema policy, and
+   browser-facing float, registry, run, import, and transition controllers.
 
-Add one whenever you:
+Use `npm test` as the faster standalone developer command when coverage is not
+needed. Coverage percentages include modules loaded by the root Node suites;
+browser entry points are additionally protected by extracted controller tests
+and the packaged-browser smoke below.
 
-- Add a new pure helper to `src/background/` (reasoning parsing, tool
-  routing, history manipulation, message shaping, …).
-- Fix a bug whose trigger can be described as "given input X, produce Y".
-- Touch the SSE / inline-think / tool-ordering logic — these are the parts
-  most likely to break silently across providers.
+Also run before handoff:
 
-Keep them focused on inputs and outputs. Do not reach into module internals or
-add mocks for Chrome APIs; if you feel the urge, the function probably wants
-to be broken into a pure core + a thin Chrome adapter.
+```bash
+git diff --check
+npm audit
+```
 
----
+The full audit is intentional: Marked and DOMPurify are declared as development
+dependencies but their verified artifacts are copied into the shipped extension.
+Classify browser-test-only advisories separately from release-reachable renderer
+advisories rather than excluding all development dependencies.
 
-## 3. Integration smoke (optional)
+## Test suites
 
-Full end-to-end is hard because typst.app requires authentication. Two
-pragmatic options if the project grows:
+`npm test` uses `node:test` and currently covers:
 
-1. **MCP smoke server.** Run a tiny Python/Node MCP server on localhost that
-   echoes `tools/list` + `tools/call`, point the extension at it, verify
-   discovery and invocation work. This can be scripted but is out of CI scope.
-2. **Puppeteer against a logged-in profile.** Launch Chromium with the
-   `--load-extension=.` flag and a persistent profile that already has a
-   typst.app session cookie, then drive the side panel with CDP. Useful
-   before major refactors; not part of the default test loop.
+- provider SSE framing across arbitrary byte boundaries, reasoning dialects,
+  malformed records, tool-call bounds, HTTP errors, and cancellation;
+- independent agent runs, captured-tab routing, Ask/Auto approve editor policy,
+  external approvals, cancellation, and ordered terminal events;
+- edit preparation for all five editor tools, unified hunk generation, inert
+  diff rendering, exact editor/text/file commit guards, and stale-preview rejection;
+- one-snapshot multi-edit runs, checkpoint state/retention, hash-conflict
+  refusal, newest-to-selected cascade ordering, partial-step reporting,
+  interrupted commit/revert recovery, export exclusion, and chronological
+  model-context notification after successful reverts;
+- file-scoped response snapshots, automatic full-response capture and divergence
+  invalidation, bounded retention, rescue-first guarded restore, diff preview,
+  export exclusion, and fixed model-context notification after restoration;
+- exact protocol envelopes, payload fields, response errors, and run identity;
+- built-in/custom/MCP registry collisions, source-owned effects, supported JSON
+  Schema validation, fail-closed arguments, and protected headers;
+- MCP 2026-07-28 JSON/SSE transport, JSON-RPC correlation, pagination,
+  discovery caching, metadata, response limits, timeouts, and cancellation;
+- transactional session create/update/delete, legacy migration, bounded
+  thumbnails/results, malformed imports, storage status, and trusted access;
+- stream batching, frame/event controller behavior, and absence of the old
+  continuous main-world polling interval;
+- ordered MAIN-world recovery through web-accessible extension files when an
+  already-open Edge tab never completes the normal nonce handshake;
+- manifest references, immutable workflow action pins, permissions, version
+  parity, bridge order, deterministic package contents, forbidden paths, and
+  ZIP safety.
 
-Neither is required for the open-source release. They are documented here so
-contributors know the escape hatches exist.
+Focused examples:
 
----
+```bash
+node --test test/agent-integration.test.mjs
+node --test test/edit-preview.test.mjs test/edit-diff-render.test.mjs
+node --test test/edit-revert.test.mjs test/chat-checkpoint.test.mjs
+node --test test/document-snapshots.test.mjs test/storage.test.mjs
+node --test test/tool-validation.test.mjs test/tool-policy.test.mjs
+node --test test/provider.test.mjs test/mcp-transport.test.mjs
+node --test test/storage.test.mjs
+node --test test/protocol.test.mjs test/stream-batching.test.mjs
+node --test test/package.test.mjs
+```
 
-## 4. Manual QA checklist (pre-release)
+Add a focused regression whenever a defect has a reproducible input. Browser
+adapters should expose pure or injected-adapter seams so cancellation, malformed
+input, and concurrency can be tested without relying only on manual QA.
 
-Run against a real typst.app project, ideally one with multiple files, an
-image asset, and at least one compile error. Budget ~10 minutes.
+## Packaged browser smoke
 
-### Install & basics
+```bash
+npm run test:browser
+```
 
-- [ ] `chrome://extensions` → **Load unpacked** on the repo root succeeds
-      without warnings.
-- [ ] Opening a typst.app project enables the side panel; opening a non-typst
-      page disables it.
-- [ ] The action icon opens the side panel.
-- [ ] First launch with no model configured lands on **Settings → Models**.
+The smoke test does not use the source checkout as the extension directory. It:
 
-### Models & streaming
+1. creates the canonical deterministic ZIP in a temporary directory;
+2. extracts that artifact with a bounded store-only ZIP reader;
+3. loads the extracted directory as an MV3 extension in a fresh profile;
+4. confirms the service worker and side panel start;
+5. serves a local intercepted `typst.app` fixture and exercises the
+   isolated/main-world editor bridge;
+6. streams a local intercepted provider response through the real agent path;
+7. verifies the editor permission control defaults to Ask, persists Auto approve,
+   restores Ask, then drives a real editor tool call and verifies both the
+   side-panel unified diff and 28 visible, ordered insertion rows in the
+   read-only editor diff surface; confirms proposed text stays outside the
+   editable source and no CodeMirror line is decorated, clicks Apply, confirms
+   the buffer changes, and confirms the diff surface is removed;
+8. verifies live and imported hostile Markdown cannot create active elements,
+   unsafe links, or remote image requests, and verifies plain-text fallback;
+9. intentionally persists a stale main-world registration, reloads the
+   extension beneath the still-open Typst fixture, and confirms registration,
+   nonce handshake, and document reads recover without a page reload;
+10. checks for side-panel page errors and forbidden external requests.
 
-- [ ] Adding an OpenAI-compatible model and sending "hi" streams back a
-      response.
-- [ ] Cancel button during streaming stops tokens immediately.
-- [ ] A reasoning-capable model shows a separate **Thinking** panel that
-      collapses after the answer arrives. Test with:
-      - a provider that emits `delta.reasoning_content`
-      - a provider that emits inline `<think>…</think>`
-- [ ] Setting **Reasoning effort** to `high` is echoed in the request body
-      (check DevTools → Network).
-- [ ] Turning off **Vision** for a vision-capable model stops image
-      attachments from being sent; the system note mentions the fallback.
+On CI, Chromium is installed with:
 
-### Context attachments
+```bash
+npx playwright install --with-deps chromium
+```
 
-- [ ] + Add → Full document attaches a numbered snapshot.
-- [ ] + Add → Editor selection attaches the highlighted range.
-- [ ] + Add → Preview screenshot captures the rendered canvas.
-- [ ] + Add → Opened image works for a PNG/JPEG asset.
-- [ ] + Add → Diagnostics includes Improve-panel items **and** CodeMirror lint
-      underlines.
-- [ ] "Add to agent" / "Add image to agent" pills appear on selection /
-      image hover.
+Locally the test can use installed Chrome/Edge or Playwright Chromium. Run the
+browser smoke twice consecutively before release to catch service-worker
+startup/order races:
 
-### Tools loop
+```bash
+npm run test:browser
+npm run test:browser
+```
 
-- [ ] Ask the agent to change a specific line. It calls `read_document`, then
-      `replace_lines`, and the editor updates.
-- [ ] Ask for an edit it can resolve via `search_replace`. Confirm only one
-      round of `search_replace` fires.
-- [ ] Ask for several coordinated edits → `patch_document` is used.
-- [ ] Break the file on purpose, ask the agent to fix. It calls
-      `read_diagnostics`, edits, and re-reads diagnostics.
-- [ ] Confirm ordering in the tool blocks: inside a single round, any
-      `read_diagnostics` call is listed last; two `replace_lines` calls with
-      different line numbers apply cleanly without shifting each other.
+## Deterministic package gate
 
-### Custom tools
+```bash
+npm run package
+npm run package:check
+```
 
-- [ ] Add a local HTTP tool (the arXiv example from the README), toggle it
-      on, ask a question that invokes it, check the request body in DevTools:
-      `{ "tool": "...", "arguments": { ... } }`.
-- [ ] Disabling the tool hides it from the next turn.
-- [ ] 30 s timeout: a tool that sleeps 31 s returns
-      `{ ok: false, error: "The operation was aborted." }`.
+`npm run package` is the only packaging implementation. It reads one canonical
+root set, rejects symlinks/hidden/traversal/sensitive paths, verifies manifest
+and side-panel references, verifies local README links, enforces exact
+`manifest.json`/`package.json` version parity, optionally enforces a release
+tag, sorts entries, and fixes ZIP timestamps/permissions.
 
-### MCP
+`package:check` compares the archive's exact ordered entry set with the
+canonical set and then rebuilds it byte-for-byte. For the release gate, also
+prove two clean package runs have the same SHA-256:
 
-- [ ] Add a Streamable-HTTP MCP server, **Probe tools** lists the tools.
-- [ ] Ask a question that invokes one of the MCP tools. The tool block shows
-      the namespaced name `mcp__<server>__<tool>`.
-- [ ] Disabling the server removes its tools from discovery on the next turn.
+```powershell
+npm run package
+Get-FileHash -Algorithm SHA256 .\typst-side-agent.zip
+npm run package
+Get-FileHash -Algorithm SHA256 .\typst-side-agent.zip
+npm run package:check
+```
 
-### Sessions
+The artifact includes manifest, source, bundled Typst docs, icons, README,
+ARCHITECTURE, PRIVACY, TESTING, and LICENSE. It excludes tests, plans,
+dependencies, workflows, git data, credentials, browser profiles, and logs.
 
-- [ ] Creating a new chat, renaming (pencil + double-click + Escape to
-      cancel), deleting.
-- [ ] Auto-name sets a ≤ 4-word title only on sessions still named
-      `New chat`. Manual rename turns auto-naming off for that session.
-- [ ] Settings → Sessions → Manage all chats: rename / delete across
-      projects, Delete all for a project, Export → Import round-trip.
+## Manual pre-release QA
 
-### Storage & privacy
+Use the extracted `typst-side-agent.zip`, a real multi-file Typst project, a
+project with an image, and at least one compile error. Keep DevTools open for
+the side panel and service worker.
 
-- [ ] API keys and tool / MCP headers survive a browser restart.
-- [ ] With the extension off, nothing in the tab network is sent to
-      configured endpoints.
+### Startup and tabs
 
-### Permissions sanity
+- [ ] The extracted artifact loads without extension errors; service worker and
+  side panel start.
+- [ ] The panel is enabled on Typst project routes and disabled elsewhere,
+  including after SPA navigation.
+- [ ] Open two Typst projects. Start a run in A, switch to B, and confirm reads,
+  edits, approvals, stream events, and persistence stay with A.
+- [ ] Start independent runs from two panel windows if supported; stopping one
+  must not stop, approve, or persist the other.
 
-- [ ] `manifest.json` `host_permissions` still restricted to what the feature
-      needs. `https://*/*` and `http://*/*` are used because custom tools can
-      POST anywhere the user configures; if we ever stop supporting arbitrary
-      endpoints, tighten these.
+### Models, rendering, and cancellation
 
----
+- [ ] A configured OpenAI-compatible provider streams content; a reasoning
+  provider renders a separate Thinking segment.
+- [ ] Reasoning effort `Default` is omitted; a non-default choice is sent.
+- [ ] Stop during initial fetch, SSE streaming, MCP discovery/call, custom-tool
+  response read, preflight wait, and approval wait. Each path terminates once,
+  retains visible partial output, and performs no later side effect.
+- [ ] Scroll upward during a long stream: the panel does not force-scroll and
+  **Jump to latest** appears. Returning near the bottom resumes follow mode.
+- [ ] Paste model/imported Markdown containing raw HTML, event attributes,
+  `javascript:`, cleartext links, forms, and images. It must remain inert and
+  must not fetch the image URL.
 
-## 5. Release checklist
+### Context and editor tools
 
-1. `npm test` is green locally and in CI.
-2. Bump `version` in **both** `manifest.json` and `package.json` (keep them
-   identical).
-3. Update the top section of `README.md` if behaviour changed.
-4. Run the manual QA checklist above on the built-from-`main` state.
-5. Zip for distribution:
+- [ ] Ask in several non-English languages and verify plans, explanations, and
+  final responses follow the latest user language unless that message requests
+  another output language. Code, Typst syntax, paths, and quoted source must not
+  be translated implicitly.
+- [ ] **+ Add** contains only editor selection, preview screenshot, and opened
+  image. There are no Full document or Diagnostics snapshot actions.
+- [ ] Selection and image hover quick-add controls respond to selection,
+  pointer, scroll, resize, route, and relevant DOM changes without continuous
+  whole-page polling.
+- [ ] Attached previews refresh from the originating tab immediately before
+  Send. Non-vision models receive the documented text fallback.
+- [ ] `read_document`, `read_diagnostics`, and `read_typst_docs` run
+  automatically and return fresh/bounded results. `read_diagnostics` accepts
+  only `{}` and always waits the fixed 750 ms compiler-settling interval.
+- [ ] Send messages from two different project files, reload the panel, and
+  verify each retained user turn still gives the model its own send-time file
+  path. Capturing that identity must not return editor source.
+- [ ] Send a message with one project file open, then switch files before
+  `read_document` or an editor tool runs. The tool must pause with the original
+  path, resume after that file is reopened, and never expose `active_file` or a
+  workspace snapshot in the `read_document` result.
+- [ ] The **Editor edits** control sits above the composer, defaults to **Ask**,
+  survives a panel/extension reload, and cannot be changed during a run. Unknown
+  stored values fall back to Ask.
+- [ ] In Ask mode, every editor mutation pauses with a unified diff, file label,
+  old/new line numbers, and addition/deletion counts. Test all five edit tools,
+  multi-hunk patches, **Apply changes**, and **Reject**; editor changes never
+  show a run grant.
+- [ ] In **Auto approve** mode, each built-in editor mutation applies without a
+  diff/approval pause, pauses on a focused-file mismatch, and still rejects
+  stale text, editor, tab, and project state. Custom HTTP and MCP calls must
+  continue to use their own approval/trust policy.
+- [ ] While approval is open, a read-only diff surface covers the originating
+  CodeMirror viewport. Old rows are red, proposed rows are green, old/new line
+  numbers are visible, rows do not overlap, proposed text remains outside the
+  editable DOM, and the document text is unchanged. Apply, Reject, cancel,
+  timeout, and stale failures remove the surface.
+- [ ] While a diff is open, switch files before clicking Apply. The commit must
+  pause, name the message file, and retry only after that file is reopened.
+  Editing the source or navigating to a different project must still fail stale
+  without changing either document. Approval buttons must have no effect after
+  cancellation or another run.
+- [ ] Malformed/missing/wrong-type tool arguments cause structured errors and no
+  editor change. Multiple line edits apply bottom-to-top; diagnostics run last.
+- [ ] A response with multiple editor tool calls shows one compact **Revert**
+  action and restores the document to its state before the first call.
+  Clicking it must open an in-panel confirmation with **Cancel** and **Revert
+  changes** actions; no native browser dialog should open, and Cancel must leave
+  the document untouched. Confirming an older response reverts later same-chat responses newest-first and
+  marks every affected response **Changes reverted**. The action is disabled
+  during another run. Switching project/file/session, inserting manual work
+  between checkpoints, or breaking any step must stop there without touching
+  unverified older text; completed newer steps stay reverted and an error is
+  shown. Reload around edit commit and revert commit, then retry to verify
+  `prepared`/`reverting` recovery. On the next turn, confirm the agent knows all
+  successfully reverted responses are no longer current.
+- [ ] Complete an agent response and verify one compact **Snapshot** action
+  appears beside **Revert** on that response, with no snapshot action in the
+  composer. Cancelled, failed, and partial responses must not receive the
+  action. Complete another response and verify only the latest completed
+  response keeps it.
+- [ ] Open **Snapshot**, verify the response snapshot's file/time/type, preview
+  the diff, restore it, and confirm the current document appears as **Before
+  restore**. Switching file/project/chat or editing after preview must fail stale
+  without overwriting the live editor. Confirm a restored snapshot produces a
+  fixed next-turn editor-state event and the agent reads the current document
+  rather than assuming old source.
+- [ ] Delete a recovery point and verify confirmation appears inside the side
+  panel with **Cancel** and **Delete** actions. No native browser confirmation
+  dialog should open. Cancel preserves the point; Delete removes it and returns
+  to the refreshed recovery list.
+- [ ] Continue without changing the document and verify the response snapshot is replaced
+  after the next full response. Change the document before continuing, and also
+  let the next agent edit it; in each case the prior automatic snapshot must be
+  removed on divergence. Cancellation/error must not create a new automatic
+  snapshot. **Before restore** snapshots must survive chat deletion.
+
+### Endpoint, custom-tool, and MCP policy
+
+- [ ] HTTPS and loopback HTTP save normally. Non-loopback HTTP fails until the
+  exact insecure acknowledgement is selected. Embedded credentials, non-HTTP
+  schemes, multiline headers, and protected-header overrides are rejected.
+- [ ] A custom name that collides with a built-in or another custom name fails.
+  Unsupported schema keywords and invalid required/type constraints fail before
+  the tool is exposed.
+- [ ] An untrusted custom tool pauses before its first network request. Approve,
+  deny, run-grant, persisted exact-integration trust, 30-second timeout, and
+  Stop behavior all match the UI.
+- [ ] MCP Probe reports protocol 2026-07-28, page count, valid/rejected schema
+  counts, and cache status. JSON and SSE servers paginate correctly.
+- [ ] MCP visible names are collision-resistant; routing uses the intended
+  original server/tool. Test `x-mcp-header`, protected headers, mismatched IDs,
+  unsupported protocol, response limit, timeout, and cancellation.
+
+### Sessions, storage, and imports
+
+- [ ] Create, switch, rename, delete, delete-project, search, open-project,
+  auto-name, export, and import work across projects. With auto-name enabled,
+  every send refreshes the generated title. A failed title request shows a
+  copyable, auto-collapsing error at the top without stopping the main response.
+  A reasoning model must receive its configured effort and name from final text
+  after thinking. Only `choices[0].message.content` is accepted; reasoning,
+  legacy completion, Responses API, and `<think>` fields must never become titles.
+  The title follows the latest user's language or explicitly requested output
+  language and must not default to English because the title prompt is English.
+- [ ] Interrupt/reload during legacy migration and retry; the final v2 index and
+  bodies contain every valid session exactly once.
+- [ ] Two overlapping renames/saves do not lose either session. A failed
+  oversized save leaves the previous body/index usable and displays the error.
+- [ ] Sent images persist only as marked bounded thumbnails (maximum two) or a
+  visible omission marker. Raw document/custom/MCP payloads are absent from the
+  export; tool display summaries are bounded.
+- [ ] Storage usage and the 8 MiB warning render. Version-1 import remains
+  display-compatible; malformed message/segment/image records are rejected.
+- [ ] Export JSON contains sessions only—no API keys, headers, endpoint trust,
+  model/integration settings, checkpoint document bodies, snapshot bodies, or
+  local snapshot-restore context events. Importing a
+  response receipt shows revert as unavailable.
+
+## Release checklist
+
+1. Merge only after CI passes `npm run verify`, installs Chromium, runs the
+   packaged browser smoke, and builds the canonical artifact.
+2. Set the same `X.Y.Z` version in `manifest.json` and `package.json`; run
+   `npm ci` so the lockfile agrees.
+3. Update README, ARCHITECTURE, PRIVACY, and TESTING for behavior or data-flow
+   changes. Update vendored libraries only through the vendor script.
+4. Run locally:
+
    ```bash
-   zip -r typst-side-agent.zip manifest.json src docs icons README.md LICENSE
+   npm ci
+   npm run verify
+npm audit
+   npm run test:browser
+   npm run test:browser
+   npm run package
+   npm run package:check
+   git diff --check
    ```
-   (CI produces this artifact automatically on every push.)
-6. Publish a **non–pre-release** GitHub Release (triggers
-   `.github/workflows/release-chrome.yml` when secrets are set):
-   - On GitHub → **Releases** → **Draft a new release**
-   - Tag `vX.Y.Z` pointing at the release commit on `main`
-   - Leave **Set as a pre-release** **unchecked** (test builds must keep it checked;
-     those releases do not upload to the Chrome Web Store)
-   - Click **Publish release**
-   The workflow checks out that tag, runs `npm test`, zips the extension, uploads it
-   to the Chrome Web Store, and submits it for review. Watch **Actions → Release to
-   Chrome Web Store**. A zip artifact is kept on the workflow run for 90 days.
-7. Pushing a tag alone or publishing a pre-release does **not** trigger Chrome
-   publishing. Manual dashboard upload is only needed if you skip the automated
-   workflow.
 
----
+5. Confirm a second clean package run has the same SHA-256, then complete the
+   manual checklist against the extracted artifact—not the source tree.
+6. Create tag `vX.Y.Z` at the reviewed commit. A mismatched tag causes the
+   package command to fail before publishing.
+7. Publish a non-prerelease GitHub Release. Tag-only pushes and prereleases do
+   not publish to the store.
+8. The release workflow checks out the release tag, runs `npm ci`,
+   `npm run verify`, the packaged browser smoke, packaging with `--expected-tag`,
+   and `npm run package:check` in an unprivileged build job. Only the verified ZIP
+   artifact then enters the protected `chrome-web-store` publishing job. Configure
+   required reviewers and store credentials on that environment.
+9. Verify the Chrome Web Store upload/review result and download the workflow
+   artifact to confirm its SHA and contents match the reviewed release.
 
-## 6. Where new testable helpers should go
-
-The test suite relies on helpers that do not touch `chrome.*`, `fetch`, or the
-DOM. When you add browser-integrated code, prefer splitting it into a pure
-core + a thin adapter:
-
-```
-// ✗ Hard to unit-test
-export async function fetchAndRenderThing(id) {
-  const resp = await chrome.runtime.sendMessage({ type: 'X', id });
-  return renderHTML(resp.items);
-}
-
-// ✓ Easy to unit-test
-export function renderThing(items) { /* pure */ }
-export async function fetchAndRenderThing(id) {
-  const resp = await chrome.runtime.sendMessage({ type: 'X', id });
-  return renderThing(resp.items);
-}
-```
-
-Then add a unit test for `renderThing` and leave `fetchAndRenderThing` for
-manual QA.
+All GitHub Actions are pinned to immutable 40-character commits and workflows
+default to `contents: read`. Any permission increase, action update, package-root
+change, or release-environment change requires explicit review.

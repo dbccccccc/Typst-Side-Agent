@@ -1,5 +1,7 @@
 # Typst Math Mode
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Mathematical typesetting: equations, fractions, attachments, matrices, symbols, styles.
 
 ---
@@ -10,7 +12,7 @@
 |------|--------|---------|
 | **Inline math** | `$...$` (no spaces inside) | `$x^2$` |
 | **Block math** | `$ ... $` (spaces inside) | `$ x^2 + y^2 = z^2 $` |
-| **Numbered equation** | `$$ ... $$` (Typst 0.13+) or `math.equation(...)` | `$$ E = mc^2 $$` |
+| **Numbered equation** | Set `math.equation(numbering: ...)`, then use block math | `#set math.equation(numbering: "(1)")` |
 
 ```typst
 The Pythagorean theorem: $x^2 + y^2 = z^2$ is inline.
@@ -18,6 +20,7 @@ The Pythagorean theorem: $x^2 + y^2 = z^2$ is inline.
 $ x^2 + y^2 = z^2 $  // This is a block.
 
 // Numbered equation:
+#set math.equation(numbering: "(1)")
 $ E = mc^2 $ <einstein>
 ```
 
@@ -64,20 +67,22 @@ $a / b / c$             // nested fractions
 
 ```typst
 $sqrt(x)$               // square root
-$sqrt(3, x)$            // nth root (or $root(3, x)$)
+$root(3, x)$            // nth root
 ```
 
 ### Delimiter Matching
 
 ```typst
 $lr((x / y))$           // auto-sized parens
-$lr[{x / y}])$          // auto-sized brackets
+$lr([x / y])$           // auto-sized brackets
 $abs(x)$                // absolute value
 $norm(v)$               // norm
 $floor(x)$              // floor
 $ceil(x)$               // ceiling
 $round(x)$              // round
 ```
+
+In Typst 0.15, relative sizes passed to `lr` and `stretch` resolve against the base glyph size rather than the wrapped content height. Typst 0.15.1 also fixes alignment points inside matched delimiters.
 
 ---
 
@@ -159,6 +164,8 @@ $arrow(x)$          // arrow
 | Mono | `mono(x)` | $mono(x)$ |
 | Sans | `sans(x)` | $sans(x)$ |
 
+Typst 0.15.1 bundles New Computer Modern 8.1.1, which corrects the regular math calligraphic alphabet.
+
 ### Size Modifiers
 
 ```typst
@@ -224,10 +231,9 @@ math.equation(
   body: content,
   block: bool,
   numbering: none|str|function,
+  number-align: alignment,
   supplement: auto|content|function,
-  align: alignment,
   alt: none|str,         // accessibility description
-  gap: length,
 ) -> content
 ```
 

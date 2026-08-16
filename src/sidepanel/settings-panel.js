@@ -1,20 +1,70 @@
 /**
  * Settings panel: tabs, models, custom tools, MCP servers, sessions manager.
  */
-import { isReasoningEffortDefault } from '../shared/constants.js';
+import { isReasoningEffortDefault, normalizeSendMessageShortcut } from '../shared/constants.js';
+import { PROTOCOL } from '../shared/protocol.js';
+import { insecureAcknowledgementFields, validateEndpointUrl, validateHeaderRecord } from '../shared/endpoint-policy.js';
+import { validateToolSchema } from '../shared/tool-validation.js';
+import { customToolTrustFingerprint, mcpServerTrustFingerprint } from '../shared/trust-policy.js';
 import { state, bg, getActiveModel } from './state.js';
+import { createSessionController } from './session-controller.js';
+import { createModelRegistryController, createRecordRegistryController } from './registry-controller.js';
+import { readSessionImportFile } from './session-import.js';
+import { setStatus } from './status-controller.js';
 
 const $ = id => document.getElementById(id);
+const sessionManagementController = createSessionController({ request: bg });
+const modelRegistryController = createModelRegistryController({
+  getSettings: () => state.settings,
+  setSettings: settings => { state.settings = settings; },
+  persist: (settings, modelMutation) => bg({ type: PROTOCOL.SAVE_SETTINGS, settings, modelMutation })
+});
+const customRegistryController = createRecordRegistryController({
+  getRecords: () => state.customTools,
+  setRecords: tools => { state.customTools = tools; },
+  persist: (tools, mutation) => bg({ type: PROTOCOL.SAVE_CUSTOM_TOOLS, tools, mutation })
+});
+const mcpRegistryController = createRecordRegistryController({
+  getRecords: () => state.mcpServers,
+  setRecords: servers => { state.mcpServers = servers; },
+  persist: (servers, mutation) => bg({ type: PROTOCOL.SAVE_MCP_SERVERS, servers, mutation })
+});
 
-function setStatus(text, isError = false) {
-  const el = $('status');
-  if (!el) return;
-  el.textContent = text;
-  el.classList.toggle('error', !!isError);
+async function runRegistryMutation(action, onSuccess) {
+  try {
+    await action();
+    onSuccess?.();
+    return true;
+  } catch (error) {
+    setStatus(`Settings were not saved: ${error.message || String(error)}`, true);
+    return false;
+  }
 }
 
 function shortenUrl(url) {
   try { return new URL(url).host; } catch { return url; }
+}
+
+function validatedEndpoint(value, insecureConfirmed) {
+  const checked = validateEndpointUrl(value, { insecureConfirmed });
+  if (!checked.ok) throw Object.assign(new Error(checked.error.message), { code: checked.error.code });
+  return checked;
+}
+
+function clearCheckboxWhenEdited(fieldIds, checkboxId) {
+  for (const id of fieldIds) {
+    $(id).addEventListener('input', () => { $(checkboxId).checked = false; });
+  }
+}
+
+function parseHeaders(text, { mcp = false } = {}) {
+  if (!text) return {};
+  let value;
+  try { value = JSON.parse(text); }
+  catch { throw new Error('Headers must be valid JSON.'); }
+  const checked = validateHeaderRecord(value, { mcp });
+  if (!checked.ok) throw new Error(checked.error.message);
+  return value;
 }
 
 // =================================================================
@@ -44,13 +94,22 @@ export function initSettingsTabs() {
 
 export function initGeneralSettings(onSettingsChanged) {
   $('save-general-settings').addEventListener('click', async () => {
-    state.settings.systemPrompt = $('system-prompt').value.trim();
-    state.settings.maxHistoryMessages = Math.max(8, Math.min(200, Number($('history-cap').value) || 40));
-    state.settings.autoNameModelId = $('auto-name-model').value || null;
+    const next = {
+      ...state.settings,
+      systemPrompt: $('system-prompt').value.trim(),
+      maxHistoryMessages: Math.max(8, Math.min(200, Number($('history-cap').value) || 40)),
+      autoNameModelId: $('auto-name-model').value || null,
+      sendMessageShortcut: normalizeSendMessageShortcut($('send-message-shortcut').value)
+    };
     try {
-      await bg({ type: 'SAVE_SETTINGS', settings: state.settings });
-      setStatus('Settings saved');
-      setTimeout(() => setStatus(''), 1500);
+      const saved = await bg({
+        type: PROTOCOL.SAVE_SETTINGS,
+        settings: next,
+        fields: ['systemPrompt', 'maxHistoryMessages', 'autoNameModelId', 'sendMessageShortcut']
+      });
+      state.settings = saved?.settings || next;
+      renderGeneralSettings();
+      setStatus('Settings saved', false, 1500);
       onSettingsChanged?.();
     } catch (e) {
       setStatus(e.message, true);
@@ -61,6 +120,7 @@ export function initGeneralSettings(onSettingsChanged) {
 export function renderGeneralSettings() {
   $('system-prompt').value = state.settings.systemPrompt || '';
   $('history-cap').value = state.settings.maxHistoryMessages || 40;
+  $('send-message-shortcut').value = normalizeSendMessageShortcut(state.settings.sendMessageShortcut);
   renderAutoNameModelOptions();
 }
 
@@ -116,7 +176,7 @@ export function applyTheme(theme) {
 
 async function applyAndSaveTheme(theme, onChange) {
   applyTheme(theme);
-  await bg({ type: 'SAVE_THEME', theme });
+  await bg({ type: PROTOCOL.SAVE_THEME, theme });
   onChange?.(theme);
 }
 
@@ -128,6 +188,7 @@ export function initModels(onModelsChanged) {
   $('add-model-btn').addEventListener('click', () => openModelForm());
   $('mf-cancel').addEventListener('click', () => closeModelForm());
   $('mf-save').addEventListener('click', () => saveModelForm(onModelsChanged));
+  clearCheckboxWhenEdited(['mf-base-url'], 'mf-insecure');
 }
 
 export function renderModelRegistry(onModelsChanged) {
@@ -170,15 +231,14 @@ export function renderModelRegistry(onModelsChanged) {
     delBtn.className = 'delete-btn';
     delBtn.title = 'Delete';
     delBtn.textContent = '×';
-    delBtn.addEventListener('click', async () => {
-      state.settings.models = state.settings.models.filter(x => x.id !== m.id);
-      if (state.settings.activeModelId === m.id) state.settings.activeModelId = state.settings.models[0]?.id || null;
-      if (state.settings.autoNameModelId === m.id) state.settings.autoNameModelId = null;
-      await bg({ type: 'SAVE_SETTINGS', settings: state.settings });
-      renderModelRegistry(onModelsChanged);
-      renderAutoNameModelOptions();
-      onModelsChanged?.();
-    });
+    delBtn.addEventListener('click', () => runRegistryMutation(
+      () => modelRegistryController.remove(m.id),
+      () => {
+        renderModelRegistry(onModelsChanged);
+        renderAutoNameModelOptions();
+        onModelsChanged?.();
+      }
+    ));
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
 
@@ -208,13 +268,14 @@ export function renderModelSelector(onSelected) {
       v.textContent = 'V';
       item.appendChild(v);
     }
-    item.addEventListener('click', async () => {
-      state.settings.activeModelId = m.id;
-      await bg({ type: 'SAVE_SETTINGS', settings: state.settings });
-      renderModelSelector(onSelected);
-      $('model-menu').classList.add('hidden');
-      onSelected?.();
-    });
+    item.addEventListener('click', () => runRegistryMutation(
+      () => modelRegistryController.select(m.id),
+      () => {
+        renderModelSelector(onSelected);
+        $('model-menu').classList.add('hidden');
+        onSelected?.();
+      }
+    ));
     list.appendChild(item);
   }
   if (state.settings.models.length === 0) {
@@ -233,6 +294,7 @@ function openModelForm(model = null) {
     $('model-form-id').value = model.id;
     $('mf-name').value = model.name || '';
     $('mf-base-url').value = model.apiBaseUrl || '';
+    $('mf-insecure').checked = !!model.insecureTransportAcknowledged;
     $('mf-api-key').value = model.apiKey || '';
     $('mf-model-id').value = model.modelId || '';
     $('mf-vision').checked = !!model.supportsVision;
@@ -242,6 +304,7 @@ function openModelForm(model = null) {
     $('model-form-id').value = '';
     $('mf-name').value = '';
     $('mf-base-url').value = '';
+    $('mf-insecure').checked = false;
     $('mf-api-key').value = '';
     $('mf-model-id').value = '';
     $('mf-vision').checked = false;
@@ -261,26 +324,28 @@ async function saveModelForm(onModelsChanged) {
   const modelId = $('mf-model-id').value.trim();
   const supportsVision = $('mf-vision').checked;
   const reasoningEffort = $('mf-reasoning-effort').value || 'default';
+  const insecureTransportAcknowledged = $('mf-insecure').checked;
   if (!name || !apiBaseUrl || !apiKey || !modelId) {
     setStatus('Fill all model fields', true);
     return;
   }
+  let endpoint;
+  try { endpoint = validatedEndpoint(apiBaseUrl, insecureTransportAcknowledged); }
+  catch (error) { setStatus(error.message, true); return; }
+  const consent = insecureAcknowledgementFields(endpoint, insecureTransportAcknowledged);
   const editId = $('model-form-id').value;
-  if (editId) {
-    const idx = state.settings.models.findIndex(m => m.id === editId);
-    if (idx !== -1) state.settings.models[idx] = { ...state.settings.models[idx], name, apiBaseUrl, apiKey, modelId, supportsVision, reasoningEffort };
-  } else {
-    const m = { id: crypto.randomUUID(), name, apiBaseUrl, apiKey, modelId, supportsVision, reasoningEffort };
-    state.settings.models.push(m);
-    if (!state.settings.activeModelId) state.settings.activeModelId = m.id;
-  }
-  await bg({ type: 'SAVE_SETTINGS', settings: state.settings });
+  const existing = editId ? state.settings.models.find(model => model.id === editId) : null;
+  const record = {
+    ...(existing || {}),
+    id: editId || crypto.randomUUID(),
+    name, apiBaseUrl: endpoint.url, apiKey, modelId, supportsVision, reasoningEffort, ...consent
+  };
+  if (!await runRegistryMutation(() => modelRegistryController.upsert(record))) return;
   closeModelForm();
   renderModelRegistry(onModelsChanged);
   renderModelSelector(onModelsChanged);
   renderAutoNameModelOptions();
-  setStatus('Model saved');
-  setTimeout(() => setStatus(''), 1500);
+  setStatus('Model saved', false, 1500);
   onModelsChanged?.();
 }
 
@@ -292,6 +357,8 @@ export function initCustomTools() {
   $('add-tool-btn').addEventListener('click', () => openToolForm());
   $('tool-cancel').addEventListener('click', () => closeToolForm());
   $('tool-save').addEventListener('click', () => saveToolForm());
+  clearCheckboxWhenEdited(['tf-name', 'tf-desc', 'tf-endpoint', 'tf-headers', 'tf-params'], 'tf-trusted');
+  clearCheckboxWhenEdited(['tf-endpoint'], 'tf-insecure');
 }
 
 export function renderCustomToolRegistry() {
@@ -302,17 +369,9 @@ export function renderCustomToolRegistry() {
       title: t.name,
       meta: `${shortenUrl(t.endpoint)}${t.description ? ' · ' + t.description : ''}`,
       enabled: t.enabled !== false,
-      onToggle: async () => {
-        t.enabled = !(t.enabled !== false);
-        await bg({ type: 'SAVE_CUSTOM_TOOLS', tools: state.customTools });
-        renderCustomToolRegistry();
-      },
+      onToggle: () => runRegistryMutation(() => customRegistryController.toggle(t.id), renderCustomToolRegistry),
       onEdit: () => openToolForm(t),
-      onDelete: async () => {
-        state.customTools = state.customTools.filter(x => x.id !== t.id);
-        await bg({ type: 'SAVE_CUSTOM_TOOLS', tools: state.customTools });
-        renderCustomToolRegistry();
-      }
+      onDelete: () => runRegistryMutation(() => customRegistryController.remove(t.id), renderCustomToolRegistry)
     }));
   }
 }
@@ -329,6 +388,8 @@ function openToolForm(tool = null) {
     $('tf-headers').value = tool.headers ? JSON.stringify(tool.headers, null, 2) : '';
     $('tf-params').value = tool.parameters ? JSON.stringify(tool.parameters, null, 2) : '';
     $('tf-enabled').checked = tool.enabled !== false;
+    $('tf-trusted').checked = !!tool.trustedAutoRun;
+    $('tf-insecure').checked = !!tool.insecureTransportAcknowledged;
   } else {
     $('tool-form-title').textContent = 'Add custom tool';
     $('tool-form-id').value = '';
@@ -338,6 +399,8 @@ function openToolForm(tool = null) {
     $('tf-headers').value = '';
     $('tf-params').value = '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}';
     $('tf-enabled').checked = true;
+    $('tf-trusted').checked = false;
+    $('tf-insecure').checked = false;
   }
 }
 
@@ -353,40 +416,37 @@ async function saveToolForm() {
   const headersText = $('tf-headers').value.trim();
   const paramsText = $('tf-params').value.trim();
   const enabled = $('tf-enabled').checked;
+  const trustedAutoRun = $('tf-trusted').checked;
+  const insecureTransportAcknowledged = $('tf-insecure').checked;
 
-  if (!/^[a-z][a-z0-9_]{1,40}$/i.test(name)) {
-    setStatus('Function name must be 2-41 chars: letters, digits, underscores.', true);
-    return;
-  }
-  if (!endpoint || !/^https?:\/\//i.test(endpoint)) {
-    setStatus('Endpoint must be an http(s) URL.', true);
-    return;
-  }
-
-  let headers = {};
-  if (headersText) {
-    try { headers = JSON.parse(headersText); }
-    catch { setStatus('Headers must be valid JSON.', true); return; }
-  }
+  let endpointCheck;
+  let headers;
+  try {
+    endpointCheck = validatedEndpoint(endpoint, insecureTransportAcknowledged);
+    headers = parseHeaders(headersText);
+  } catch (error) { setStatus(error.message, true); return; }
 
   let parameters = { type: 'object', properties: {} };
   if (paramsText) {
     try { parameters = JSON.parse(paramsText); }
     catch { setStatus('Parameters must be valid JSON Schema.', true); return; }
   }
+  const schema = validateToolSchema(parameters);
+  if (!schema.ok) { setStatus(schema.error.message, true); return; }
 
   const editId = $('tool-form-id').value;
-  if (editId) {
-    const idx = state.customTools.findIndex(t => t.id === editId);
-    if (idx !== -1) state.customTools[idx] = { ...state.customTools[idx], name, description, endpoint, headers, parameters, enabled };
-  } else {
-    state.customTools.push({ id: crypto.randomUUID(), name, description, endpoint, headers, parameters, enabled });
-  }
-  await bg({ type: 'SAVE_CUSTOM_TOOLS', tools: state.customTools });
+  const id = editId || crypto.randomUUID();
+  const record = {
+    id, name, description, endpoint: endpointCheck.url, headers, parameters, enabled,
+    trustedAutoRun,
+    ...insecureAcknowledgementFields(endpointCheck, insecureTransportAcknowledged)
+  };
+  record.trustedAutoRunFingerprint = trustedAutoRun ? customToolTrustFingerprint(record) : null;
+  try { await customRegistryController.upsert(record); }
+  catch (error) { setStatus(error.message, true); return; }
   closeToolForm();
   renderCustomToolRegistry();
-  setStatus('Custom tool saved');
-  setTimeout(() => setStatus(''), 1500);
+  setStatus('Custom tool saved', false, 1500);
 }
 
 // =================================================================
@@ -398,6 +458,8 @@ export function initMcpServers() {
   $('mcp-cancel').addEventListener('click', () => closeMcpForm());
   $('mcp-save').addEventListener('click', () => saveMcpForm());
   $('mcp-probe').addEventListener('click', () => probeMcpForm());
+  clearCheckboxWhenEdited(['mcp-name', 'mcp-url', 'mcp-headers', 'mcp-protocol'], 'mcp-trusted');
+  clearCheckboxWhenEdited(['mcp-url'], 'mcp-insecure');
 }
 
 export function renderMcpRegistry() {
@@ -408,17 +470,9 @@ export function renderMcpRegistry() {
       title: s.name,
       meta: shortenUrl(s.url),
       enabled: s.enabled !== false,
-      onToggle: async () => {
-        s.enabled = !(s.enabled !== false);
-        await bg({ type: 'SAVE_MCP_SERVERS', servers: state.mcpServers });
-        renderMcpRegistry();
-      },
+      onToggle: () => runRegistryMutation(() => mcpRegistryController.toggle(s.id), renderMcpRegistry),
       onEdit: () => openMcpForm(s),
-      onDelete: async () => {
-        state.mcpServers = state.mcpServers.filter(x => x.id !== s.id);
-        await bg({ type: 'SAVE_MCP_SERVERS', servers: state.mcpServers });
-        renderMcpRegistry();
-      }
+      onDelete: () => runRegistryMutation(() => mcpRegistryController.remove(s.id), renderMcpRegistry)
     }));
   }
 }
@@ -435,6 +489,9 @@ function openMcpForm(server = null) {
     $('mcp-url').value = server.url || '';
     $('mcp-headers').value = server.headers ? JSON.stringify(server.headers, null, 2) : '';
     $('mcp-enabled').checked = server.enabled !== false;
+    $('mcp-protocol').value = server.protocolMode || 'auto';
+    $('mcp-trusted').checked = !!server.trustedAutoRun;
+    $('mcp-insecure').checked = !!server.insecureTransportAcknowledged;
   } else {
     $('mcp-form-title').textContent = 'Add MCP server';
     $('mcp-form-id').value = '';
@@ -442,6 +499,9 @@ function openMcpForm(server = null) {
     $('mcp-url').value = '';
     $('mcp-headers').value = '';
     $('mcp-enabled').checked = true;
+    $('mcp-protocol').value = 'auto';
+    $('mcp-trusted').checked = false;
+    $('mcp-insecure').checked = false;
   }
 }
 
@@ -455,14 +515,17 @@ function readMcpForm() {
   const url = $('mcp-url').value.trim();
   const headersText = $('mcp-headers').value.trim();
   const enabled = $('mcp-enabled').checked;
+  const protocolMode = $('mcp-protocol').value || 'auto';
+  const trustedAutoRun = $('mcp-trusted').checked;
+  const insecureTransportAcknowledged = $('mcp-insecure').checked;
   if (!name) throw new Error('Name required');
-  if (!url || !/^https?:\/\//i.test(url)) throw new Error('URL must be http(s)');
-  let headers = {};
-  if (headersText) {
-    try { headers = JSON.parse(headersText); }
-    catch { throw new Error('Headers must be valid JSON'); }
-  }
-  return { name, url, headers, enabled };
+  if (!['auto', '2026-07-28'].includes(protocolMode)) throw new Error('Unsupported MCP protocol mode.');
+  const endpoint = validatedEndpoint(url, insecureTransportAcknowledged);
+  const headers = parseHeaders(headersText, { mcp: true });
+  return {
+    name, url: endpoint.url, headers, enabled, protocolMode, trustedAutoRun,
+    ...insecureAcknowledgementFields(endpoint, insecureTransportAcknowledged)
+  };
 }
 
 async function saveMcpForm() {
@@ -470,17 +533,13 @@ async function saveMcpForm() {
   try { data = readMcpForm(); }
   catch (e) { setStatus(e.message, true); return; }
   const editId = $('mcp-form-id').value;
-  if (editId) {
-    const idx = state.mcpServers.findIndex(s => s.id === editId);
-    if (idx !== -1) state.mcpServers[idx] = { ...state.mcpServers[idx], ...data };
-  } else {
-    state.mcpServers.push({ id: crypto.randomUUID(), ...data });
-  }
-  await bg({ type: 'SAVE_MCP_SERVERS', servers: state.mcpServers });
+  const record = { id: editId || crypto.randomUUID(), ...data };
+  record.trustedAutoRunFingerprint = record.trustedAutoRun ? mcpServerTrustFingerprint(record) : null;
+  try { await mcpRegistryController.upsert(record); }
+  catch (error) { setStatus(error.message, true); return; }
   closeMcpForm();
   renderMcpRegistry();
-  setStatus('MCP server saved');
-  setTimeout(() => setStatus(''), 1500);
+  setStatus('MCP server saved', false, 1500);
 }
 
 async function probeMcpForm() {
@@ -490,14 +549,20 @@ async function probeMcpForm() {
   let data;
   try { data = readMcpForm(); }
   catch (e) { result.classList.add('err'); result.textContent = e.message; return; }
-  const r = await bg({ type: 'PROBE_MCP_SERVER', server: data });
-  if (r?.ok) {
+  try {
+    const r = await bg({ type: PROTOCOL.PROBE_MCP_SERVER, server: { id: $('mcp-form-id').value || 'probe', ...data } });
     result.classList.add('ok');
-    if (r.tools.length === 0) result.textContent = 'Connected. (Server returned 0 tools.)';
-    else result.textContent = `Connected. ${r.tools.length} tool(s):\n` + r.tools.map(t => '  • ' + t.name).join('\n');
-  } else {
+    const lines = [
+      `Connected using MCP ${r.version}.`,
+      `${r.tools.length} valid tool(s), ${r.errors?.length || 0} rejected schema(s), ${r.pages || 1} page(s).`,
+      `Discovery cache: ${r.cache?.status || 'unknown'}; TTL ${r.ttlMs || 0} ms (${r.cacheScope || 'private'}).`
+    ];
+    if (r.tools.length) lines.push(...r.tools.map(tool => `  • ${tool.name}`));
+    if (r.errors?.length) lines.push(...r.errors.slice(0, 5).map(error => `  ! ${error.name || 'tool'}: ${error.message}`));
+    result.textContent = lines.join('\n');
+  } catch (error) {
     result.classList.add('err');
-    result.textContent = 'Probe failed: ' + (r?.error || 'unknown error');
+    result.textContent = `Probe failed [${error.code || 'ERROR'}]: ${error.message}`;
   }
 }
 
@@ -539,9 +604,25 @@ export function initSessionsManager(hooks = {}) {
  * prime the cache and to refresh after mutations.
  */
 export async function renderSessionsManager() {
-  const groups = await bg({ type: 'SESSION_LIST_ALL_GROUPED' });
+  const [groups, storageStatus] = await Promise.all([
+    sessionManagementController.listGrouped(),
+    sessionManagementController.storageStatus()
+  ]);
   sessionGroupsCache = Array.isArray(groups) ? groups : [];
+  const storageEl = $('sessions-storage-status');
+  if (storageEl) {
+    const used = Number(storageStatus?.bytes || 0);
+    const threshold = Number(storageStatus?.warningThreshold || 0);
+    storageEl.textContent = `Stored chat data: ${formatBytes(used)}${storageStatus?.warning ? ` — above the ${formatBytes(threshold)} warning threshold` : ''}`;
+    storageEl.classList.toggle('storage-warning', !!storageStatus?.warning);
+  }
   renderSessionsManagerFromCache();
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
 function renderSessionsManagerFromCache() {
@@ -563,7 +644,7 @@ function renderSessionsManagerFromCache() {
   const totalProjects = filtered.length;
   const totalSessions = filtered.reduce((n, g) => n + g.sessions.length, 0);
   const totalMessages = filtered.reduce(
-    (n, g) => n + g.sessions.reduce((m, s) => m + (s.messages?.length || 0), 0),
+    (n, g) => n + g.sessions.reduce((m, s) => m + (s.messageCount || 0), 0),
     0
   );
   summary.textContent = totalProjects === 0
@@ -581,12 +662,7 @@ function sessionMatchesQuery(session, projectId, q) {
   if (!q) return true;
   if ((session.name || '').toLowerCase().includes(q)) return true;
   if (projectId.toLowerCase().includes(q)) return true;
-  if (Array.isArray(session.messages)) {
-    for (const m of session.messages) {
-      if (typeof m?.content === 'string' && m.content.toLowerCase().includes(q)) return true;
-    }
-  }
-  return false;
+  return typeof session.searchText === 'string' && session.searchText.includes(q);
 }
 
 function buildProjectCard(group) {
@@ -627,7 +703,7 @@ function buildProjectCard(group) {
   openBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!projectId) return;
-    await bg({ type: 'OPEN_PROJECT_TAB', projectId });
+    await sessionManagementController.openProject(projectId);
   });
 
   const delAllBtn = document.createElement('button');
@@ -639,11 +715,10 @@ function buildProjectCard(group) {
     e.stopPropagation();
     const msg = `Delete all ${sessions.length} chat${sessions.length !== 1 ? 's' : ''} from project "${projectId || '(blank)'}"? This cannot be undone.`;
     if (!confirm(msg)) return;
-    await bg({ type: 'SESSION_DELETE_BY_PROJECT', projectId });
+    await sessionManagementController.removeProject(projectId);
     await renderSessionsManager();
     sessionsManagerHooks?.onSessionsChanged?.();
-    setStatus('Project sessions removed');
-    setTimeout(() => setStatus(''), 1500);
+    setStatus('Project sessions removed', false, 1500);
   });
 
   if (projectId) actions.appendChild(openBtn);
@@ -681,13 +756,13 @@ function buildManagedSessionRow(session, projectId) {
 
   const preview = document.createElement('div');
   preview.className = 'managed-session-preview';
-  const previewText = firstUserMessage(session) || '(no messages)';
+  const previewText = session.preview || '(no messages)';
   preview.textContent = previewText;
   preview.title = previewText;
 
   const meta = document.createElement('div');
   meta.className = 'managed-session-meta';
-  const count = Array.isArray(session.messages) ? session.messages.length : 0;
+  const count = Number.isInteger(session.messageCount) ? session.messageCount : 0;
   meta.textContent = `${count} msg · ${formatRelative(session.updatedAt)}`;
 
   main.appendChild(name);
@@ -705,7 +780,7 @@ function buildManagedSessionRow(session, projectId) {
     openBtn.textContent = '↗';
     openBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      sessionsManagerHooks?.onSwitchToSession?.(session);
+      Promise.resolve(sessionsManagerHooks?.onSwitchToSession?.(session)).catch(error => setStatus(error.message || String(error), true));
     });
     actions.appendChild(openBtn);
   }
@@ -727,11 +802,10 @@ function buildManagedSessionRow(session, projectId) {
   delBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm(`Delete "${session.name || 'Untitled'}"?`)) return;
-    await bg({ type: 'SESSION_DELETE', sessionId: session.id });
+    await sessionManagementController.remove(session.id);
     await renderSessionsManager();
     sessionsManagerHooks?.onSessionsChanged?.(session);
-    setStatus('Chat deleted');
-    setTimeout(() => setStatus(''), 1200);
+    setStatus('Chat deleted', false, 1200);
   });
 
   actions.appendChild(renameBtn);
@@ -768,7 +842,7 @@ function beginManagedSessionRename(row, nameEl, session) {
     row.classList.remove('renaming');
     const next = input.value.trim();
     if (commit && next && next !== original) {
-      await bg({ type: 'SESSION_UPDATE', sessionId: session.id, name: next });
+      await sessionManagementController.update(session.id, { name: next, userRenamed: true });
       await renderSessionsManager();
       sessionsManagerHooks?.onSessionsChanged?.({ ...session, name: next });
     } else {
@@ -781,16 +855,6 @@ function beginManagedSessionRename(row, nameEl, session) {
   });
   input.addEventListener('blur', () => finish(true));
   input.addEventListener('click', (e) => e.stopPropagation());
-}
-
-function firstUserMessage(session) {
-  if (!Array.isArray(session.messages)) return '';
-  for (const m of session.messages) {
-    if (m?.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
-      return m.content.replace(/\s+/g, ' ').trim().slice(0, 160);
-    }
-  }
-  return '';
 }
 
 function formatRelative(ts) {
@@ -807,22 +871,11 @@ function formatRelative(ts) {
 }
 
 async function exportSessions() {
-  const groups = await bg({ type: 'SESSION_LIST_ALL_GROUPED' });
-  const flat = [];
-  for (const g of (Array.isArray(groups) ? groups : [])) {
-    for (const s of g.sessions) flat.push(s);
-  }
-  if (flat.length === 0) {
-    setStatus('Nothing to export', true);
-    setTimeout(() => setStatus(''), 1600);
+  const payload = await sessionManagementController.exportAll();
+  if (!Array.isArray(payload?.sessions) || payload.sessions.length === 0) {
+    setStatus('Nothing to export', true, 1600);
     return;
   }
-  const payload = {
-    format: 'typst-side-agent-sessions',
-    version: 1,
-    exportedAt: Date.now(),
-    sessions: flat
-  };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -833,25 +886,15 @@ async function exportSessions() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  setStatus(`Exported ${flat.length} chat${flat.length !== 1 ? 's' : ''}`);
-  setTimeout(() => setStatus(''), 1800);
+  setStatus(`Exported ${payload.sessions.length} chat${payload.sessions.length !== 1 ? 's' : ''}`, false, 1800);
 }
 
 async function importSessions(file) {
-  const text = await file.text();
-  let parsed;
-  try { parsed = JSON.parse(text); }
-  catch { throw new Error('File is not valid JSON'); }
-  const records = Array.isArray(parsed) ? parsed
-                : Array.isArray(parsed?.sessions) ? parsed.sessions
-                : null;
-  if (!records) throw new Error('Unrecognised session export format');
-  const r = await bg({ type: 'SESSION_IMPORT', records });
-  if (!r?.ok) throw new Error(r?.error || 'Import rejected');
+  const exportData = await readSessionImportFile(file);
+  const r = await sessionManagementController.importAll(exportData);
   await renderSessionsManager();
   sessionsManagerHooks?.onSessionsChanged?.();
-  setStatus(`Imported ${r.imported} chat${r.imported !== 1 ? 's' : ''}`);
-  setTimeout(() => setStatus(''), 2000);
+  setStatus(`Imported ${r.imported} chat${r.imported !== 1 ? 's' : ''}${r.rejected ? `; rejected ${r.rejected} invalid record${r.rejected === 1 ? '' : 's'}` : ''}`, false, 2000);
 }
 
 /**

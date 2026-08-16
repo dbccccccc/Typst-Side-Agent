@@ -1,5 +1,7 @@
 # Typst Types and Foundations
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > All primitive types, their constructors, methods, and usage patterns.
 
 ---
@@ -44,8 +46,10 @@ Indicates a smart default. Parameters with `auto` have contextual behavior.
 Whole numbers. Decimal or `0x` hex literals.
 
 ```typc
-int(value) -> int           // constructor from bool/int/float/str/bytes/decimal
+int(value, base: int = 10) -> int  // from bool/int/float/str/bytes/decimal
 ```
+
+`base` controls parsing for strings and defaults to 10. The smallest and largest representable integers are available as `int.min` and `int.max`.
 
 ---
 
@@ -79,6 +83,8 @@ str(value, base: int) -> str
 | `self.last(default)` | str | Last character |
 | `self.at(index, default)` | str | Character at index (negative wraps) |
 | `self.slice(start, end, count)` | str | Extract substring |
+
+For `slice`, pass either `end` or `count`, not both. Typst 0.15 reports an error when both are supplied.
 
 ### Search Methods
 | Method | Returns | Description |
@@ -154,6 +160,8 @@ Sequence of values in parentheses.
 | `self.at(index, default)` | Item at index (negative wraps) |
 | `self.slice(start, end, count)` | Subslice |
 
+For `slice`, `end` and `count` are mutually exclusive.
+
 ### Mutation
 | Method | Description |
 |--------|-------------|
@@ -213,6 +221,10 @@ Add/modify: `dict.key = value`
 | `self.keys()` | All keys |
 | `self.values()` | All values |
 | `self.pairs()` | All (key, value) tuples |
+| `self.map(mapper)` | Transform each value while preserving keys |
+| `self.filter(test)` | Keep values for which `test` returns true |
+
+Dictionary `map` and `filter` callbacks receive the value; keys are retained.
 
 ---
 
@@ -235,6 +247,25 @@ Captured function arguments via `..sink`.
 arguments.pos() -> array        // positional args
 arguments.named() -> dictionary // named args
 arguments.at(key, default)      // access by index or name
+arguments.map(mapper) -> arguments
+arguments.filter(test) -> arguments
+```
+
+Named arguments are also readable through field syntax (`args.fill`). The captured argument list is immutable; `map` and `filter` return a new `arguments` value and apply callbacks to argument values.
+
+---
+
+## range
+
+Construct an array of integers. Typst 0.15 adds the `inclusive` option.
+
+```typc
+range(start: int = 0, end: int, inclusive: bool = false, step: int = 1) -> array
+```
+
+```typst
+#range(3)                         // (0, 1, 2)
+#range(1, 5, inclusive: true)     // (1, 2, 3, 4, 5)
 ```
 
 ---
@@ -255,21 +286,39 @@ Constants: `calc.pi`, `calc.tau`, `calc.e`, `calc.inf`
 | `calc.ln(x)` | Natural log |
 | `calc.deg(rad)` | Radians to degrees |
 | `calc.rad(deg)` | Degrees to radians |
+| `calc.erf(x)` | Gauss error function |
 
 ### Trigonometric
-`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(x, y)`, `sinh`, `cosh`, `tanh`
+`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(x, y)`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
 
 ### Rounding
 `floor`, `ceil`, `trunc`, `fract`, `round(value, digits)`
 
 ### Combinatorics
-`factorial`, `perm(base, numbers)`, `binom(n, k)`
+`fact`, `perm(base, numbers)`, `binom(n, k)`
 
 ### Number Theory
-`gcd`, `lcm`, `clamp(value, min, max)`, `rem`, `rem-euclid`, `quo`, `mod`, `odd`, `even`
+`gcd`, `lcm`, `clamp(value, min, max)`, `rem`, `div-euclid`, `rem-euclid`, `quo`, `odd`, `even`
 
 ### Aggregation
 `min(..values)`, `max(..values)`, `sum(..values)`, `product(..values)`, `norm(p, ..values)`
+
+---
+
+## path
+
+Typst 0.15 introduces a first-class file path that retains the source file from which it originated.
+
+```typc
+path(value: str) -> path
+```
+
+```typst
+#let logo = path("assets/logo.svg")
+#image(logo)
+```
+
+Use forward slashes on all operating systems. A path can safely cross file and package boundaries without changing what its relative form points to.
 
 ---
 
@@ -278,14 +327,14 @@ Constants: `calc.pi`, `calc.tau`, `calc.e`, `calc.inf`
 | Type | Key Info |
 |------|----------|
 | **bytes** | Binary data: `bytes(string)`, `bytes(1, 2, 3)`, `.len()`, `.at()`, `.slice()` |
-| **datetime** | `datetime(year, month, day, hour, minute, second)`, `datetime.today()`, `.display(format)`, `.year()`, `.month()`, `.day()`, `.weekday()`, `.ordinal()`, `.iso()` |
+| **datetime** | `datetime(year, month, day, hour, minute, second)`, `datetime.today(offset: duration(hours: 2))`, `.display(format)`, `.year()`, `.month()`, `.day()`, `.weekday()`, `.ordinal()`, `.iso()` |
 | **duration** | `duration(weeks, days, hours, minutes, seconds)`, `.seconds()`, `.minutes()`, etc. |
 | **decimal** | Fixed-point precise arithmetic |
 | **regex** | `regex(pattern)` for string matching |
 | **version** | `version(major, minor, patch, ..)`, `.components()`, `.at(index)` |
 | **symbol** | Unicode symbol with variants: `sym.arrow.r`, `sym.alpha` |
 | **label** | `<name>` — attach to elements for referencing |
-| **selector** | Filter for elements: `heading.where(level: 1)`, `.or()`, `.and()`, `.before()`, `.after()` |
+| **selector** | Filter for elements: `heading.where(level: 1)`, `.or()`, `.and()`, `.before()`, `.after()`, `.within()` |
 | **location** | Document location: `.page()`, `.position()`, `.page-numbering()` |
 | **module** | Imported file/package contents |
 | **color** | See [Visualize](09-visualize.md) |

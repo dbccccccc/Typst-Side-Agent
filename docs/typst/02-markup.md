@@ -1,5 +1,7 @@
 # Typst Markup
 
+> Applies to **Typst 0.15.1** (reviewed 2026-08-08).
+>
 > Markup mode elements: paragraphs, headings, lists, emphasis, links, labels, raw text.
 
 ---
@@ -26,11 +28,14 @@ and continues on the next line.
 | `spacing` | length | Paragraph spacing |
 | `justify` | bool | Whether to justify text |
 | `linebreaks` | `"simple"` or `"optimized"` | Line breaking algorithm |
-| `first-line-indent` | length | Indent of first line |
+| `first-line-indent` | length or dictionary | Indent amount, optionally with `all` |
 | `hanging-indent` | length | Hanging indent |
 
 ```typst
 #set par(justify: true, first-line-indent: 1em, spacing: 0.65em)
+
+// Indent every paragraph, including the first one after a heading.
+#set par(first-line-indent: (amount: 1em, all: true))
 ```
 
 ---
@@ -102,8 +107,9 @@ Use #strong[red text] with a show rule: #show strong: set text(red)
 - Third item
 ```
 
-**Parameters:** `list(tight, marker, indent, body-indent, spacing, ..children)`
+**Parameters:** `list(tight, marker, indent, marker-align, body-indent, spacing, ..children)`
 - `marker`: bullet symbol(s), default `([•], [‣], [–])`
+- `marker-align`: marker alignment; defaults to `end` (the marker's vertical baseline when no vertical component is given)
 
 ### Numbered List (Enum)
 
@@ -221,12 +227,14 @@ Text with a footnote#footnote[This is the footnote text.]
 # linebreak()       // explicit function
 ```
 
-### Horizontal Rule
+### Thematic Divider
 
 ```typst
-#line(length: 100%)
-#hr()               // shorthand
+#divider()                    // semantic break between sections
+#line(length: 100%)           // purely visual rule
 ```
+
+`divider()` is the semantic thematic-break element added in Typst 0.15. Use `line` when the rule is only decoration.
 
 ---
 
@@ -246,6 +254,7 @@ Text with a footnote#footnote[This is the footnote text.]
 | `+ item` | `#enum[Item]` |
 | `/ Term: def` | `#terms.item[Term][def]` |
 | `\` | `#linebreak()` |
+| Thematic break | `#divider()` |
 | `/* ... */`, `// ...` | Comments |
 | `"text"` | Smart quotes |
 | `~` | Non-breaking space |
