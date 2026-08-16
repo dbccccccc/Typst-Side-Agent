@@ -26,7 +26,7 @@
     "dompurify": "3.4.13",
     "eslint": "10.8.1",
     "globals": "17.9.0",
-    "marked": "12.0.0",
+    "marked": "18.0.9",
     "playwright-core": "1.62.1"
   }
 }
