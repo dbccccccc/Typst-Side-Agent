@@ -304,14 +304,15 @@
       #${INLINE_DIFF_LAYER_ID} .tsa-inline-diff-stat-add { color: #56d364; }
       #${INLINE_DIFF_LAYER_ID} .tsa-inline-diff-stat-delete { color: #ff7b72; }
       #${INLINE_DIFF_LAYER_ID} .tsa-inline-diff-body {
-        min-width: max-content;
       }
       #${INLINE_DIFF_LAYER_ID} .tsa-inline-diff-row {
         display: grid;
-        grid-template-columns: 44px 44px 22px minmax(max-content, 1fr);
+        grid-template-columns: 44px 44px 22px minmax(0, 1fr);
         min-height: var(--tsa-inline-diff-line-height, 18px);
         box-sizing: border-box;
-        white-space: pre;
+        white-space: pre-wrap;
+        word-break: break-all;
+        overflow-wrap: break-word;
       }
       #${INLINE_DIFF_LAYER_ID} .tsa-inline-diff-line-number {
         padding-inline-end: 7px;

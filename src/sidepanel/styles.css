@@ -1278,7 +1278,6 @@ button { font-family: inherit; }
 }
 .edit-diff-body:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
 .edit-diff-hunk-header {
-  min-width: max-content;
   padding: 3px 8px;
   color: var(--accent-text);
   background: var(--accent-soft);
@@ -1286,9 +1285,10 @@ button { font-family: inherit; }
 }
 .edit-diff-row {
   display: grid;
-  grid-template-columns: 38px 38px 18px minmax(max-content, 1fr);
-  min-width: max-content;
-  white-space: pre;
+  grid-template-columns: 38px 38px 18px minmax(0, 1fr);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 .edit-diff-line-number {
   padding: 0 6px 0 3px;
