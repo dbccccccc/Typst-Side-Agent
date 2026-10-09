@@ -31,7 +31,7 @@
     "eslint": "10.8.1",
     "globals": "17.9.0",
     "jsdom": "30.1.2",
-    "marked": "12.0.0",
+    "marked": "18.1.0",
     "playwright-core": "1.62.1"
   }
 }
