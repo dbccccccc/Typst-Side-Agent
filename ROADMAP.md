@@ -1,40 +1,43 @@
 # Roadmap
 
 This roadmap records likely maintenance directions, not release commitments or
-promised timelines. The v1.1.0 correctness, security, browser, and packaging
-gates do not depend on these structural follow-ups.
+promised timelines. The release gates do not depend on these follow-ups.
 
-## Streaming ownership and instrumentation
+## Completed structural work
 
-The main streaming hot paths are bounded: unfinished content appends only its
-new suffix, completed segments cross one Markdown/sanitization boundary, and
-editor mutations do not trigger broad preview/workspace rescans.
+The decomposition items from the 1.1.0 roadmap shipped in 1.1.1:
+storage is split into one store per domain behind `storage.js`, the agent run
+loop and tool runners live under `src/background/agent/`, the side panel's
+send flow, transcript renderer, snapshot controller, and settings tabs are
+separate modules, and the content scripts share one generated copy of the
+dependency-free shared leaves instead of hand-synchronized duplicates. Every
+side-panel rendering module, including the snapshot controller, is covered by
+jsdom tests in addition to the packaged browser smoke.
 
-A future refactor can move the remaining streaming state machine out of
-`src/sidepanel/chat.js` into a focused controller and add packaged-browser
-operation counters. The goal is easier direct testing and regression diagnosis,
-not a user-visible behavior change.
+## Optional host permissions
 
-## Side-panel orchestration
+The manifest requests access to every HTTPS and HTTP origin so the worker can
+reach user-configured model, custom-tool, and MCP endpoints. Moving those
+origins to `optional_host_permissions` and requesting the exact origin when an
+integration is saved would narrow the installed footprint. The change needs a
+decision on upgrade behavior for existing installs, a settings-side permission
+prompt, a structured error when a saved endpoint lacks a grant, and a browser
+smoke that can grant permissions, so it is tracked here rather than done
+silently.
 
-`src/sidepanel/app.js` is the composition root and still coordinates send,
-session, tab, snapshot, and controller transitions. Focused controllers already
-own attachments, registry mutations, run-event acceptance, status UI, and
-session commands.
+## Renderer library upgrade
 
-A future change can move the remaining lifecycle state machines behind injected
-controllers, reduce `app.js`, and add direct concurrency tests without changing
-the UI or storage formats.
+Marked is pinned at 12.0.0 and the renderer hooks in `src/sidepanel/markdown.js`
+use that major version's positional renderer signature. Upgrading past it
+requires adapting the `link`, `image`, and `html` hooks to the token-object
+signature and re-running the hostile-Markdown assertions in the DOM tests and
+the browser smoke.
 
-## Storage decomposition
+## Composition root
 
-`src/background/storage.js` safely serializes mutations and owns settings,
-sessions, checkpoints, snapshots, and migration. It is intentionally still one
-large module.
-
-A future change can split those domains behind one stable facade and one
-transaction coordinator. Existing storage keys, retention limits, import/export
-formats, and service-worker call sites should remain compatible.
+`src/sidepanel/app.js` still owns tab synchronization, the context-attachment
+chips and menus, and run-recovery glue. Those could follow the send flow into
+injected controllers with their own DOM tests; no behavior change is implied.
 
 ## Proposing roadmap work
 

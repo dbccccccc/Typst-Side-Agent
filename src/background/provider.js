@@ -1,6 +1,7 @@
 import { isReasoningEffortDefault, LIMITS } from '../shared/constants.js';
 import { raceWithSignal, throwIfAborted } from '../shared/abort.js';
 import { readResponseTextBounded } from '../shared/bounded-response.js';
+import { codedError } from '../shared/errors.js';
 
 const MAX_TOOL_CALLS = 64;
 const MAX_TOOL_CALL_ID_CHARS = 128;
@@ -82,10 +83,10 @@ export async function streamProviderRound({
     error.code = 'PROVIDER_HTTP_ERROR';
     throw error;
   }
-  if (!response.body?.getReader) throw coded('PROVIDER_STREAM_MISSING', 'Provider returned no readable stream.');
+  if (!response.body?.getReader) throw codedError('PROVIDER_STREAM_MISSING', 'Provider returned no readable stream.');
   const declaredLength = Number(response.headers?.get?.('Content-Length'));
   if (Number.isFinite(declaredLength) && declaredLength > LIMITS.MAX_PROVIDER_STREAM_BYTES) {
-    throw coded('PROVIDER_STREAM_TOO_LARGE', 'Provider stream exceeds the 4 MiB limit.');
+    throw codedError('PROVIDER_STREAM_TOO_LARGE', 'Provider stream exceeds the 4 MiB limit.');
   }
 
   const reader = response.body.getReader();
@@ -103,7 +104,7 @@ export async function streamProviderRound({
   function emit(channel, text) {
     if (!text) return;
     if (content.length + reasoning.length + text.length > LIMITS.MAX_PROVIDER_OUTPUT_CHARS) {
-      throw coded('PROVIDER_OUTPUT_TOO_LARGE', 'Provider output exceeds the 1 MiB limit.');
+      throw codedError('PROVIDER_OUTPUT_TOO_LARGE', 'Provider output exceeds the 1 MiB limit.');
     }
     if (channel === 'content') content += text;
     else reasoning += text;
@@ -118,7 +119,7 @@ export async function streamProviderRound({
     try { parsed = JSON.parse(data); }
     catch {
       malformed += 1;
-      if (malformed > 16) throw coded('PROVIDER_MALFORMED_SSE', 'Provider emitted too many malformed SSE records.');
+      if (malformed > 16) throw codedError('PROVIDER_MALFORMED_SSE', 'Provider emitted too many malformed SSE records.');
       return;
     }
     const delta = parsed?.choices?.[0]?.delta;
@@ -132,32 +133,32 @@ export async function streamProviderRound({
       inlineThinkBuffer = split.remainder;
     }
     if (delta.tool_calls != null && !Array.isArray(delta.tool_calls)) {
-      throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted a malformed tool-call collection.');
+      throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted a malformed tool-call collection.');
     }
     for (const call of delta.tool_calls || []) {
       if (!call || typeof call !== 'object' || Array.isArray(call)) {
-        throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted a malformed tool call.');
+        throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted a malformed tool call.');
       }
       const index = Number.isInteger(call.index) ? call.index : toolAccum.size;
       if (index < 0 || index >= MAX_TOOL_CALLS) {
-        throw coded('PROVIDER_INVALID_TOOL_CALL', `Provider tool-call index must be between 0 and ${MAX_TOOL_CALLS - 1}.`);
+        throw codedError('PROVIDER_INVALID_TOOL_CALL', `Provider tool-call index must be between 0 and ${MAX_TOOL_CALLS - 1}.`);
       }
       if (!toolAccum.has(index)) toolAccum.set(index, { id: '', name: '', arguments: '' });
       const item = toolAccum.get(index);
       if (call.id != null) {
-        if (typeof call.id !== 'string') throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider tool-call id must be a string.');
+        if (typeof call.id !== 'string') throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider tool-call id must be a string.');
         item.id = call.id;
       }
       if (call.function?.name != null) {
-        if (typeof call.function.name !== 'string') throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider tool name must be a string.');
+        if (typeof call.function.name !== 'string') throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider tool name must be a string.');
         item.name += call.function.name;
       }
       if (call.function?.arguments != null) {
-        if (typeof call.function.arguments !== 'string') throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider tool arguments must be a string.');
+        if (typeof call.function.arguments !== 'string') throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider tool arguments must be a string.');
         item.arguments += call.function.arguments;
       }
       if (item.id.length > MAX_TOOL_CALL_ID_CHARS || item.name.length > MAX_TOOL_NAME_CHARS || item.arguments.length > MAX_TOOL_ARGUMENT_CHARS) {
-        throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider tool call exceeds the supported size limits.');
+        throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider tool call exceeds the supported size limits.');
       }
     }
   }
@@ -170,14 +171,14 @@ export async function streamProviderRound({
       if (value) {
         streamBytes += value.byteLength;
         if (streamBytes > LIMITS.MAX_PROVIDER_STREAM_BYTES) {
-          throw coded('PROVIDER_STREAM_TOO_LARGE', 'Provider stream exceeds the 4 MiB limit.');
+          throw codedError('PROVIDER_STREAM_TOO_LARGE', 'Provider stream exceeds the 4 MiB limit.');
         }
       }
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
       for (const line of lines) {
-        if (signal?.aborted) throw coded('CANCELLED', 'Provider stream cancelled.');
+        if (signal?.aborted) throw codedError('CANCELLED', 'Provider stream cancelled.');
         processLine(line.trim());
         if (doneEvent) break;
       }
@@ -200,17 +201,11 @@ export async function streamProviderRound({
   const toolCalls = [...toolAccum.values()].map(call => {
     const invalidIdCharacter = [...call.id].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
     if (!call.id || invalidIdCharacter || !/^[A-Za-z0-9_-]{1,128}$/.test(call.name)) {
-      throw coded('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted an invalid tool-call id or name.');
+      throw codedError('PROVIDER_INVALID_TOOL_CALL', 'Provider emitted an invalid tool-call id or name.');
     }
-    if (seenToolCallIds.has(call.id)) throw coded('PROVIDER_DUPLICATE_TOOL_CALL_ID', 'Provider emitted a duplicate tool-call id.');
+    if (seenToolCallIds.has(call.id)) throw codedError('PROVIDER_DUPLICATE_TOOL_CALL_ID', 'Provider emitted a duplicate tool-call id.');
     seenToolCallIds.add(call.id);
     return { id: call.id, name: call.name, rawArgs: call.arguments };
   });
   return { content: content || null, reasoning: reasoning || null, toolCalls: toolCalls.length ? toolCalls : null };
-}
-
-function coded(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
 }

@@ -56,9 +56,16 @@
     return info ? info.line : null;
   }
 
+  const ERROR_HINT_RE = new RegExp([
+    'error', 'unexpected', 'missing', 'unknown', 'unclosed', 'delimiter', 'syntax', 'mismatch', 'unmatched', 'overflow',
+    'type\\s*error', 'parse\\s*error', '\\binvalid\\b', 'not\\s+allowed', 'not\\s+found', 'failed', 'cannot\\b', 'could\\s+not\\b',
+    'recursive', 'duplicate\\b', 'exceeded\\b', 'does\\s+not\\s+(?:exist|match|converge|stabilize)', 'did\\s+not\\s+(?:converge|stabilize)',
+    'seems\\s+to\\s+be\\s+infinite', 'occurs\\s+multiple\\s+times', 'is\\s+encrypted', 'out\\s+of\\s+range', 'zero[-\\s]?sized'
+  ].join('|'), 'i');
+
   function inferSeverity(message) {
     if (!message) return 'error';
-    if (/error|unexpected|missing|unknown|unclosed|delimiter|syntax|mismatch|unmatched|overflow|type\s*error|parse\s*error|\binvalid\b|not\s+allowed|not\s+found|failed|cannot\b|could\s+not\b|recursive|duplicate\b|exceeded\b|does\s+not\s+(?:exist|match|converge|stabilize)|did\s+not\s+(?:converge|stabilize)|seems\s+to\s+be\s+infinite|occurs\s+multiple\s+times|is\s+encrypted|out\s+of\s+range|zero[-\s]?sized/i.test(message)) {
+    if (ERROR_HINT_RE.test(message)) {
       return 'error';
     }
     return 'warning';

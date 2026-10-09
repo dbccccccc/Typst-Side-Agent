@@ -73,7 +73,8 @@ export function createAttachmentController({
     },
     async buildHistorySnapshot(attachments) {
       const previews = [];
-      for (const preview of (attachments?.previews || []).slice(0, LIMITS.MAX_PERSISTED_PREVIEWS_PER_MESSAGE)) previews.push(await makeThumbnail(preview?.dataUrl));
+      const retained = (attachments?.previews || []).slice(0, LIMITS.MAX_PERSISTED_PREVIEWS_PER_MESSAGE);
+      for (const preview of retained) previews.push(await makeThumbnail(preview?.dataUrl));
       return {
         selections: (attachments?.selections || [])
           .map(item => {
@@ -97,7 +98,8 @@ export function isLivePreviewDataUrl(value) {
 
 function assertLivePreviewDataUrl(value) {
   if (!isLivePreviewDataUrl(value)) {
-    throw new Error(`Preview image must be a local PNG, JPEG, or WebP data URL no larger than ${Math.floor(LIMITS.MAX_PREVIEW_DATA_URL_CHARS / (1024 * 1024))} MiB.`);
+    const limitMiB = Math.floor(LIMITS.MAX_PREVIEW_DATA_URL_CHARS / (1024 * 1024));
+    throw new Error(`Preview image must be a local PNG, JPEG, or WebP data URL no larger than ${limitMiB} MiB.`);
   }
 }
 

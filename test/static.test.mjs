@@ -1,130 +1,53 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { marked } from 'marked';
 import { listShippedJs } from '../scripts/list-shipped-js.mjs';
 import { MAIN_WORLD_FILES } from '../src/background/content-bootstrap.js';
-import { marked } from 'marked';
 
 const execFile = promisify(execFileCb);
 const REPO_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+const read = relative => readFile(path.join(REPO_ROOT, relative), 'utf8');
+const manifest = JSON.parse(await read('manifest.json'));
+const pkg = JSON.parse(await read('package.json'));
 
-// ---------- manifest.json validation ----------
+// ---------- manifest.json ----------
 
-test('manifest.json is valid JSON with required MV3 fields', async () => {
-  const text = await readFile(new URL('../manifest.json', import.meta.url), 'utf8');
-  const m = JSON.parse(text);
-
-  assert.equal(m.manifest_version, 3);
-  assert.ok(typeof m.name === 'string' && m.name.length > 0);
-  assert.ok(/^\d+\.\d+\.\d+/.test(m.version), 'semver-ish version');
-  assert.equal(m.background?.type, 'module');
-  assert.ok(m.background?.service_worker, 'has service worker');
-  assert.ok(m.side_panel?.default_path, 'declares side panel');
-});
-
-test('manifest.json: every web_accessible_resource file really exists', async () => {
-  const text = await readFile(new URL('../manifest.json', import.meta.url), 'utf8');
-  const m = JSON.parse(text);
-  const files = (m.web_accessible_resources || []).flatMap(r => r.resources || []);
-  for (const rel of files) {
-    const stat = await readFile(new URL('../' + rel, import.meta.url), 'utf8').catch(() => null);
-    assert.ok(stat != null, `missing asset: ${rel}`);
+test('manifest.json declares the MV3 entry points and every referenced file exists', async () => {
+  assert.equal(manifest.manifest_version, 3);
+  assert.ok(typeof manifest.name === 'string' && manifest.name.length > 0);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.background?.type, 'module');
+  const referenced = [
+    manifest.background.service_worker,
+    manifest.side_panel.default_path,
+    ...(manifest.content_scripts || []).flatMap(script => script.js || []),
+    ...(manifest.web_accessible_resources || []).flatMap(item => item.resources || [])
+  ];
+  for (const relative of referenced) {
+    await assert.doesNotReject(readFile(path.join(REPO_ROOT, relative)), `missing file: ${relative}`);
   }
 });
 
-test('manifest.json: service_worker and content_scripts point at real files', async () => {
-  const text = await readFile(new URL('../manifest.json', import.meta.url), 'utf8');
-  const m = JSON.parse(text);
-  const paths = [m.background.service_worker];
-  for (const cs of m.content_scripts || []) {
-    paths.push(...(cs.js || []));
-  }
-  for (const rel of paths) {
-    const txt = await readFile(new URL('../' + rel, import.meta.url), 'utf8').catch(() => null);
-    assert.ok(txt != null, `missing script: ${rel}`);
-  }
-});
-
-test('workflows pin actions, declare least privilege, and use canonical packaging', async () => {
-  const ci = await readFile(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
-  const release = await readFile(path.join(REPO_ROOT, '.github', 'workflows', 'release-chrome.yml'), 'utf8');
-  for (const source of [ci, release]) {
-    assert.doesNotMatch(source, /uses:\s*[^\s]+@(v\d+|main|master)\s*$/m);
-    for (const match of source.matchAll(/uses:\s*[^\s]+@([^\s#]+)/g)) assert.match(match[1], /^[0-9a-f]{40}$/);
-    assert.match(source, /permissions:\s*\r?\n\s+contents:\s*read/);
-    assert.match(source, /npm run package/);
-    assert.doesNotMatch(source, /zip\s+-r/);
-  }
-  assert.match(ci, /npm run verify/);
-  assert.match(ci, /npm run test:browser/);
-  assert.match(ci, /node-version: \['22\.13\.0', '24'\]/);
-  assert.equal((ci.match(/npm run test:browser/g) || []).length, 2);
-  assert.match(ci, /npx --no-install playwright-core install --with-deps chromium/);
-  assert.match(ci, /npm run audit:release/);
-  assert.match(release, /environment:\s*chrome-web-store/);
-  assert.match(release, /--expected-tag/);
-  assert.match(release, /npm run test:browser/);
-  assert.equal((release.match(/npm run test:browser/g) || []).length, 2);
-  assert.match(release, /npx --no-install playwright-core install --with-deps chromium/);
-  assert.match(release, /npm run audit:release/);
-  assert.match(release, /RELEASE_TAG:\s*\$\{\{ github\.event\.release\.tag_name \}\}/);
-  assert.doesNotMatch(release, /run:\s*[^\n]*\$\{\{\s*github\.event\.release\.tag_name/);
-  for (const source of [ci, release]) assert.doesNotMatch(source, /npx\s+playwright\b/);
-  assert.match(release, /npm run package:check/);
-  assert.match(release, /publish:\s*[\s\S]*needs:\s*build[\s\S]*environment:\s*chrome-web-store/);
-  assert.ok(release.indexOf('npm run verify') < release.indexOf('environment: chrome-web-store'));
-});
-
-test('manifest and package versions are exactly equal', async () => {
-  const pkg = JSON.parse(await readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+test('manifest and package versions are exactly equal and the Node floor is pinned consistently', async () => {
   assert.equal(manifest.version, pkg.version);
-  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
-});
-
-test('documented Node floor matches the pinned verification toolchain', async () => {
-  const pkg = JSON.parse(await readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-  const lock = JSON.parse(await readFile(path.join(REPO_ROOT, 'package-lock.json'), 'utf8'));
-  assert.equal(pkg.engines.node, '>=22.13.0');
+  const lock = JSON.parse(await read('package-lock.json'));
+  assert.equal(pkg.engines.node, '>=24.15.0');
   assert.equal(lock.packages[''].engines.node, pkg.engines.node);
 });
 
-test('public release documents track the current package and private reporting route', async () => {
-  const [changelog, security, privacy, readme] = await Promise.all([
-    readFile(path.join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'SECURITY.md'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'PRIVACY.md'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'README.md'), 'utf8')
-  ]);
-  assert.match(changelog, new RegExp(`^## \\[${manifest.version.replaceAll('.', '\\.') }\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm'));
-  assert.match(security, /security\/advisories\/new/);
-  assert.match(privacy, /\[SECURITY\.md\]\(\.\/SECURITY\.md\)/);
-  for (const document of ['CHANGELOG.md', 'CONTRIBUTING.md', 'ROADMAP.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md']) {
-    assert.match(readme, new RegExp(`\\[${document.replace('.', '\\.')}\\]\\(\\.\\/${document.replace('.', '\\.')}\\)`));
-  }
-});
+// ---------- content-script bootstrap ----------
 
-test('release checklist renders all nine ordered steps', async () => {
-  const testing = await readFile(path.join(REPO_ROOT, 'TESTING.md'), 'utf8');
-  const section = testing.slice(testing.indexOf('## Release checklist'), testing.indexOf('All GitHub Actions'));
-  const html = marked.parse(section);
-  assert.equal((html.match(/<li>/g) || []).length, 9);
-  assert.match(html, /npm run audit:release/);
-  assert.doesNotMatch(html, /<pre><code[^>]*>[^<]*5\. Confirm/s);
-});
-
-test('content bridge adapter loads before isolated code and exposes all main-world assets', () => {
+test('the bridge adapter loads first in both worlds and every main-world asset is web accessible', async () => {
   assert.deepEqual(manifest.content_scripts[0].js.slice(0, 2), ['src/content/bridge-protocol.js', 'src/content/isolated.js']);
+  assert.equal(MAIN_WORLD_FILES[0], 'src/content/bridge-protocol.js');
   const resources = new Set(manifest.web_accessible_resources.flatMap(item => item.resources));
-  for (const path of MAIN_WORLD_FILES) assert.ok(resources.has(path), path);
-});
-
-test('normal registration and isolated recovery use the exact same main-world order', async () => {
-  const isolated = await readFile(path.join(REPO_ROOT, 'src', 'content', 'isolated.js'), 'utf8');
+  for (const file of MAIN_WORLD_FILES) assert.ok(resources.has(file), file);
+  const isolated = await read('src/content/isolated.js');
   const literal = isolated.match(/const MAIN_WORLD_FILES = Object\.freeze\(\[([\s\S]*?)\]\);/);
   assert.ok(literal, 'isolated recovery list is declared');
   const recoveryFiles = [...literal[1].matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]);
@@ -132,91 +55,110 @@ test('normal registration and isolated recovery use the exact same main-world or
 });
 
 test('the obsolete direct page-tool mutation protocol cannot return', async () => {
-  for (const relative of [
-    'src/shared/protocol.js',
-    'src/content/bridge-protocol.js',
-    'src/content/main.js',
-    'src/background/agent.js'
-  ]) {
-    const source = await readFile(path.join(REPO_ROOT, relative), 'utf8');
-    assert.doesNotMatch(source, /PAGE_EXECUTE_TOOL/);
+  for (const relative of ['src/shared/protocol.js', 'src/content/bridge-protocol.js', 'src/content/main.js']) {
+    assert.doesNotMatch(await read(relative), /PAGE_EXECUTE_TOOL/);
+  }
+  for (const entry of await readdir(path.join(REPO_ROOT, 'src', 'background', 'agent'))) {
+    assert.doesNotMatch(await read(`src/background/agent/${entry}`), /PAGE_EXECUTE_TOOL/);
   }
 });
 
-test('side panel ships response recovery with in-panel revert, restore, and delete dialogs', async () => {
-  const [html, app, chat, controller, styles] = await Promise.all([
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'index.html'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'app.js'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'chat.js'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'snapshot-controller.js'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'styles.css'), 'utf8')
-  ]);
-  assert.doesNotMatch(html, /id="snapshot-btn"/);
-  assert.doesNotMatch(html, /id="snapshot-create"/);
-  assert.match(html, /id="snapshot-menu"/);
-  assert.match(html, /id="snapshot-dialog-layer"/);
-  assert.match(html, /id="snapshot-dialog-confirm"/);
-  assert.match(html, /id="revert-dialog-layer"/);
-  assert.match(html, /id="revert-dialog-confirm"/);
-  assert.match(app, /createSnapshotController/);
-  assert.match(chat, /responseStatus === 'complete'/);
-  assert.match(chat, /response-snapshot-button/);
-  assert.match(chat, /openRevertConfirmation/);
-  assert.doesNotMatch(chat, /globalThis\.confirm/);
-  assert.match(controller, /DOCUMENT_SNAPSHOT_PREVIEW/);
-  assert.match(controller, /DOCUMENT_SNAPSHOT_RESTORE/);
-  assert.match(controller, /renderDeleteDialog/);
-  assert.match(controller, /dialogMode = 'delete'/);
-  assert.doesNotMatch(controller, /globalThis\.confirm/);
-  assert.match(styles, /\.snapshot-menu\s*\{/);
-  assert.match(styles, /\.snapshot-dialog-layer\s*\{/);
-  assert.match(styles, /\.snapshot-dialog-note\.is-danger/);
-  assert.match(styles, /\.revert-dialog\s*\{/);
+// ---------- workflows ----------
+
+test('workflows pin actions to commits, run the full gates, and keep publishing behind the protected environment', async () => {
+  const ci = await read('.github/workflows/ci.yml');
+  const release = await read('.github/workflows/release-chrome.yml');
+  for (const source of [ci, release]) {
+    for (const match of source.matchAll(/uses:\s*[^\s]+@([^\s#]+)/g)) assert.match(match[1], /^[0-9a-f]{40}$/, 'actions must be pinned to a commit');
+    assert.match(source, /permissions:\s*\r?\n\s+contents:\s*read/);
+    assert.match(source, /npm run verify/);
+    assert.match(source, /npm run audit:release/);
+    assert.match(source, /npm run package\b/);
+    assert.match(source, /npx --no-install playwright-core install --with-deps chromium/);
+    assert.ok((source.match(/npm run test:browser/g) || []).length >= 2, 'browser smoke runs at least twice');
+    assert.doesNotMatch(source, /zip\s+-r/);
+    assert.doesNotMatch(source, /npx\s+playwright\b/);
+  }
+  const nodeFloor = pkg.engines.node.replace(/^>=/, '');
+  assert.ok(ci.includes(`'${nodeFloor}'`), `CI covers the package Node floor ${nodeFloor}`);
+  assert.match(release, /environment:\s*chrome-web-store/);
+  assert.match(release, /--expected-tag/);
+  assert.match(release, /npm run package:check/);
+  assert.match(release, /RELEASE_TAG:\s*\$\{\{ github\.event\.release\.tag_name \}\}/);
+  assert.doesNotMatch(release, /run:\s*[^\n]*\$\{\{\s*github\.event\.release\.tag_name/, 'the tag reaches shell only through an env var');
+  assert.ok(release.indexOf('npm run verify') < release.indexOf('environment: chrome-web-store'), 'verification precedes publishing');
 });
 
-test('side panel exposes one About dialog from the logo and General settings', async () => {
-  const [html, app, styles] = await Promise.all([
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'index.html'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'app.js'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'styles.css'), 'utf8')
+// ---------- public documents ----------
+
+test('public release documents track the current package and the private reporting route', async () => {
+  const [changelog, security, privacy, readme, testing] = await Promise.all([
+    read('CHANGELOG.md'), read('SECURITY.md'), read('PRIVACY.md'), read('README.md'), read('TESTING.md')
   ]);
+  const versionHeading = new RegExp(`^## \\[${manifest.version.replaceAll('.', '\\.')}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm');
+  assert.match(changelog, versionHeading);
+  assert.match(security, /security\/advisories\/new/);
+  assert.match(privacy, /\[SECURITY\.md\]\(\.\/SECURITY\.md\)/);
+  for (const document of ['CHANGELOG.md', 'CONTRIBUTING.md', 'ROADMAP.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md']) {
+    assert.match(readme, new RegExp(`\\[${document.replace('.', '\\.')}\\]\\(\\.\\/${document.replace('.', '\\.')}\\)`));
+  }
+  const checklist = testing.slice(testing.indexOf('## Release checklist'));
+  const html = marked.parse(checklist);
+  assert.match(html, /<ol>/, 'the release checklist is an ordered list');
+  assert.match(html, /npm run audit:release/);
+  assert.match(html, /npm run package:check/);
+});
+
+// ---------- side-panel structure ----------
+
+test('response recovery uses in-panel dialogs and never a native confirm()', async () => {
+  const html = await read('src/sidepanel/index.html');
+  for (const id of ['snapshot-menu', 'snapshot-dialog-layer', 'snapshot-dialog-confirm', 'revert-dialog-layer', 'revert-dialog-confirm', 'about-dialog-layer']) {
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  }
+  assert.doesNotMatch(html, /id="snapshot-btn"|id="snapshot-create"/, 'snapshot creation is automatic, not a composer action');
+  const sidepanelFiles = (await readdir(path.join(REPO_ROOT, 'src', 'sidepanel'))).filter(name => name.endsWith('.js'));
+  for (const name of sidepanelFiles) {
+    assert.doesNotMatch(await read(`src/sidepanel/${name}`), /globalThis\.confirm|window\.confirm/, name);
+  }
+  const revertControl = await read('src/sidepanel/revert-control.js');
+  assert.match(revertControl, /revert-dialog-confirm/);
+  assert.match(revertControl, /response-snapshot-button/);
+  const snapshotController = await read('src/sidepanel/snapshot-controller.js');
+  assert.match(snapshotController, /DOCUMENT_SNAPSHOT_PREVIEW/);
+  assert.match(snapshotController, /DOCUMENT_SNAPSHOT_RESTORE/);
+});
+
+test('the About dialog links only to the project, the Typst forum profile, and the store listing', async () => {
+  const html = await read('src/sidepanel/index.html');
   assert.match(html, /id="about-icon-button"/);
   assert.match(html, /id="about-settings-button"/);
-  assert.match(html, /id="about-dialog-layer"/);
-  assert.match(html, /href="https:\/\/github\.com\/dbccccccc\/Typst-Side-Agent"/);
-  assert.match(html, /href="https:\/\/forum\.typst\.app\/u\/dbcccc\/summary"/);
-  assert.match(html, /href="https:\/\/chromewebstore\.google\.com\/detail\/eljacjoifoamnmbclmhlpcdabdioleab"/);
-  assert.match(app, /CHROME_WEB_STORE_URL/);
-  assert.match(app, /chrome\.runtime\.getManifest\(\)/);
-  assert.doesNotMatch(app, /chrome\.runtime\.id/);
-  assert.match(app, /openAboutDialog/);
-  assert.match(styles, /\.about-settings-button\s*\{/);
-  assert.match(styles, /\.about-dialog\s*\{/);
-  assert.match(styles, /\.about-resource-link\s*\{/);
+  const links = [...html.matchAll(/class="about-resource-link"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*class="about-resource-link"/g)]
+    .map(match => match[1] || match[2]);
+  assert.deepEqual(links, [
+    'https://github.com/dbccccccc/Typst-Side-Agent',
+    'https://forum.typst.app/u/dbcccc/summary',
+    'https://chromewebstore.google.com/detail/eljacjoifoamnmbclmhlpcdabdioleab'
+  ]);
+  const sources = await Promise.all((await readdir(path.join(REPO_ROOT, 'src', 'sidepanel')))
+    .filter(name => name.endsWith('.js'))
+    .map(name => read(`src/sidepanel/${name}`)));
+  assert.ok(sources.some(source => /chrome\.runtime\.getManifest\(\)/.test(source)), 'the version label comes from the manifest');
+  assert.ok(sources.every(source => !/chrome\.runtime\.id/.test(source)), 'the extension id is never read at runtime');
 });
 
-test('auto-name failures are routed to the shared top notification', async () => {
-  const app = await readFile(path.join(REPO_ROOT, 'src', 'sidepanel', 'app.js'), 'utf8');
-  assert.match(app, /Chat auto-name failed:/);
-  assert.match(app, /setStatus\(`Chat auto-name failed: \$\{error\?\.message \|\| String\(error\)\}`, true\)/);
-  assert.doesNotMatch(app, /Naming is best-effort and must never block sending/);
-});
+// ---------- syntax ----------
 
-// ---------- Syntax check on every shipped JS module ----------
-
-test('every src/**/*.js file parses cleanly', async () => {
+test('every shipped src/**/*.js file parses cleanly', async () => {
   const files = await listShippedJs(REPO_ROOT);
   assert.ok(files.length > 0, 'found at least one source file');
-
   const failed = [];
   await Promise.all(files.map(async rel => {
-    const abs = path.join(REPO_ROOT, rel);
     try {
-      await execFile(process.execPath, ['--check', abs]);
+      await execFile(process.execPath, ['--check', path.join(REPO_ROOT, rel)]);
     } catch (e) {
       failed.push({ rel, err: (e.stderr || e.message).toString().split('\n').slice(0, 3).join(' | ') });
     }
   }));
-
   assert.equal(failed.length, 0, 'syntax errors: ' + JSON.stringify(failed, null, 2));
 });

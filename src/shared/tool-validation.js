@@ -16,6 +16,9 @@ const VALIDATION_KEYS = new Set([
 ]);
 const KNOWN_KEYS = new Set([...ANNOTATION_KEYS, ...VALIDATION_KEYS]);
 const TYPES = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
+const HEADER_TYPES = ['string', 'integer', 'boolean'];
+const HTTP_TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const ownProperty = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
 export function validateToolSchema(schema, options = {}) {
   const state = { nodes: 0, errors: [], allowMcpHeaders: !!options.allowMcpHeaders, headerNames: new Set() };
@@ -66,12 +69,22 @@ function validateSchemaNode(schema, path, depth, state, isRoot, staticallyReacha
     if (!KNOWN_KEYS.has(key)) add(state, 'UNSUPPORTED_SCHEMA_KEYWORD', `${path}.${key}`, `Unsupported JSON Schema keyword: ${key}`);
   }
   if (isRoot && schema.type !== 'object') add(state, 'SCHEMA_ROOT_TYPE', `${path}.type`, 'Tool schemas must have type "object" at the root.');
-  if (schema.type != null && (!TYPES.has(schema.type) || typeof schema.type !== 'string')) add(state, 'SCHEMA_INVALID_TYPE', `${path}.type`, 'Schema type is not supported.');
-  if (schema.required != null && (!Array.isArray(schema.required) || schema.required.some(x => typeof x !== 'string'))) add(state, 'SCHEMA_REQUIRED', `${path}.required`, 'required must be an array of property names.');
-  if (schema.properties != null && (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties))) add(state, 'SCHEMA_PROPERTIES', `${path}.properties`, 'properties must be an object.');
-  if (schema.additionalProperties != null && typeof schema.additionalProperties !== 'boolean') add(state, 'SCHEMA_ADDITIONAL_PROPERTIES', `${path}.additionalProperties`, 'additionalProperties must be boolean in the supported subset.');
+  if (schema.type != null && (!TYPES.has(schema.type) || typeof schema.type !== 'string')) {
+    add(state, 'SCHEMA_INVALID_TYPE', `${path}.type`, 'Schema type is not supported.');
+  }
+  if (schema.required != null && (!Array.isArray(schema.required) || schema.required.some(x => typeof x !== 'string'))) {
+    add(state, 'SCHEMA_REQUIRED', `${path}.required`, 'required must be an array of property names.');
+  }
+  if (schema.properties != null && (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties))) {
+    add(state, 'SCHEMA_PROPERTIES', `${path}.properties`, 'properties must be an object.');
+  }
+  if (schema.additionalProperties != null && typeof schema.additionalProperties !== 'boolean') {
+    add(state, 'SCHEMA_ADDITIONAL_PROPERTIES', `${path}.additionalProperties`, 'additionalProperties must be boolean in the supported subset.');
+  }
   if (schema.pattern != null) {
-    if (typeof schema.pattern !== 'string' || schema.pattern.length > 256) add(state, 'SCHEMA_PATTERN', `${path}.pattern`, 'pattern must be a string of at most 256 characters.');
+    if (typeof schema.pattern !== 'string' || schema.pattern.length > 256) {
+      add(state, 'SCHEMA_PATTERN', `${path}.pattern`, 'pattern must be a string of at most 256 characters.');
+    }
     else {
       let syntaxValid = true;
       try { new RegExp(schema.pattern, 'u'); }
@@ -85,18 +98,25 @@ function validateSchemaNode(schema, path, depth, state, isRoot, staticallyReacha
     }
   }
   for (const key of ['minItems', 'maxItems', 'minLength', 'maxLength']) {
-    if (schema[key] != null && (!Number.isInteger(schema[key]) || schema[key] < 0)) add(state, 'SCHEMA_BOUND', `${path}.${key}`, `${key} must be a non-negative integer.`);
+    if (schema[key] != null && (!Number.isInteger(schema[key]) || schema[key] < 0)) {
+      add(state, 'SCHEMA_BOUND', `${path}.${key}`, `${key} must be a non-negative integer.`);
+    }
   }
   for (const key of ['minimum', 'maximum']) {
-    if (schema[key] != null && (typeof schema[key] !== 'number' || !Number.isFinite(schema[key]))) add(state, 'SCHEMA_BOUND', `${path}.${key}`, `${key} must be a finite number.`);
+    if (schema[key] != null && (typeof schema[key] !== 'number' || !Number.isFinite(schema[key]))) {
+      add(state, 'SCHEMA_BOUND', `${path}.${key}`, `${key} must be a finite number.`);
+    }
   }
-  if (schema.enum != null && (!Array.isArray(schema.enum) || schema.enum.length > 1_000)) add(state, 'SCHEMA_ENUM', `${path}.enum`, 'enum must be a bounded array.');
+  if (schema.enum != null && (!Array.isArray(schema.enum) || schema.enum.length > 1_000)) {
+    add(state, 'SCHEMA_ENUM', `${path}.enum`, 'enum must be a bounded array.');
+  }
 
   if (schema['x-mcp-header'] != null) {
     const header = schema['x-mcp-header'];
     if (!state.allowMcpHeaders) add(state, 'UNSUPPORTED_SCHEMA_KEYWORD', `${path}.x-mcp-header`, 'x-mcp-header is only supported for MCP-discovered schemas.');
-    else if (!staticallyReachable || !['string', 'integer', 'boolean'].includes(schema.type) || typeof header !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header)) {
-      add(state, 'INVALID_MCP_HEADER', `${path}.x-mcp-header`, 'x-mcp-header must be a unique HTTP token on a statically reachable string, integer, or boolean property.');
+    else if (!staticallyReachable || !HEADER_TYPES.includes(schema.type) || typeof header !== 'string' || !HTTP_TOKEN_RE.test(header)) {
+      add(state, 'INVALID_MCP_HEADER', `${path}.x-mcp-header`,
+        'x-mcp-header must be a unique HTTP token on a statically reachable string, integer, or boolean property.');
     } else {
       const lower = header.toLowerCase();
       if (state.headerNames.has(lower)) add(state, 'DUPLICATE_MCP_HEADER', `${path}.x-mcp-header`, 'x-mcp-header names must be case-insensitively unique.');
@@ -104,11 +124,15 @@ function validateSchemaNode(schema, path, depth, state, isRoot, staticallyReacha
     }
   }
 
-  for (const [key, child] of Object.entries(schema.properties || {})) validateSchemaNode(child, `${path}.properties.${key}`, depth + 1, state, false, staticallyReachable);
+  for (const [key, child] of Object.entries(schema.properties || {})) {
+    validateSchemaNode(child, `${path}.properties.${key}`, depth + 1, state, false, staticallyReachable);
+  }
   if (schema.items != null) validateSchemaNode(schema.items, `${path}.items`, depth + 1, state, false, false);
   for (const key of ['allOf', 'anyOf', 'oneOf']) {
     if (schema[key] == null) continue;
-    if (!Array.isArray(schema[key]) || schema[key].length === 0 || schema[key].length > 20) add(state, 'SCHEMA_COMPOSITION', `${path}.${key}`, `${key} must be a non-empty bounded array.`);
+    if (!Array.isArray(schema[key]) || schema[key].length === 0 || schema[key].length > 20) {
+      add(state, 'SCHEMA_COMPOSITION', `${path}.${key}`, `${key} must be a non-empty bounded array.`);
+    }
     else schema[key].forEach((child, i) => validateSchemaNode(child, `${path}.${key}[${i}]`, depth + 1, state, false, false));
   }
 }
@@ -181,8 +205,12 @@ function validateValue(value, schema, path, depth, state) {
   if (state.errors.length >= MAX_ERRORS || (schema.type && !matchesType(value, schema.type))) return;
 
   if (typeof value === 'string') {
-    if (schema.minLength != null && [...value].length < schema.minLength) add(state, 'MIN_LENGTH', path, `String must contain at least ${schema.minLength} characters.`);
-    if (schema.maxLength != null && [...value].length > schema.maxLength) add(state, 'MAX_LENGTH', path, `String must contain at most ${schema.maxLength} characters.`);
+    if (schema.minLength != null && [...value].length < schema.minLength) {
+      add(state, 'MIN_LENGTH', path, `String must contain at least ${schema.minLength} characters.`);
+    }
+    if (schema.maxLength != null && [...value].length > schema.maxLength) {
+      add(state, 'MAX_LENGTH', path, `String must contain at most ${schema.maxLength} characters.`);
+    }
     if (schema.pattern != null && !new RegExp(schema.pattern, 'u').test(value)) add(state, 'PATTERN', path, 'String does not match the required pattern.');
   }
   if (typeof value === 'number') {
@@ -193,13 +221,21 @@ function validateValue(value, schema, path, depth, state) {
     if (value.length > MAX_ARRAY_LENGTH) add(state, 'ARRAY_LIMIT', path, 'Array exceeds the supported length.');
     if (schema.minItems != null && value.length < schema.minItems) add(state, 'MIN_ITEMS', path, `Array must contain at least ${schema.minItems} items.`);
     if (schema.maxItems != null && value.length > schema.maxItems) add(state, 'MAX_ITEMS', path, `Array must contain at most ${schema.maxItems} items.`);
-    if (schema.items !== undefined && value.length <= MAX_ARRAY_LENGTH) value.forEach((item, i) => validateValue(item, schema.items, `${path}[${i}]`, depth + 1, state));
+    if (schema.items !== undefined && value.length <= MAX_ARRAY_LENGTH) {
+      value.forEach((item, i) => validateValue(item, schema.items, `${path}[${i}]`, depth + 1, state));
+    }
   }
   if (isPlainObject(value)) {
-    for (const key of schema.required || []) if (!Object.prototype.hasOwnProperty.call(value, key)) add(state, 'REQUIRED', `${path}.${key}`, `Missing required property: ${key}`);
-    for (const [key, child] of Object.entries(schema.properties || {})) if (Object.prototype.hasOwnProperty.call(value, key)) validateValue(value[key], child, `${path}.${key}`, depth + 1, state);
+    for (const key of schema.required || []) {
+      if (!ownProperty(value, key)) add(state, 'REQUIRED', `${path}.${key}`, `Missing required property: ${key}`);
+    }
+    for (const [key, child] of Object.entries(schema.properties || {})) {
+      if (ownProperty(value, key)) validateValue(value[key], child, `${path}.${key}`, depth + 1, state);
+    }
     if (schema.additionalProperties === false) {
-      for (const key of Object.keys(value)) if (!Object.prototype.hasOwnProperty.call(schema.properties || {}, key)) add(state, 'ADDITIONAL_PROPERTY', `${path}.${key}`, `Unexpected property: ${key}`);
+      for (const key of Object.keys(value)) {
+        if (!ownProperty(schema.properties || {}, key)) add(state, 'ADDITIONAL_PROPERTY', `${path}.${key}`, `Unexpected property: ${key}`);
+      }
     }
   }
   for (const key of ['allOf', 'anyOf', 'oneOf']) {

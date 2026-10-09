@@ -19,12 +19,19 @@ import {
   deleteDocumentSnapshotForEditor, listDocumentSnapshotsForEditor,
   previewDocumentSnapshotRestore, restoreDocumentSnapshot
 } from './document-snapshots.js';
+import { codedError } from '../shared/errors.js';
 
 const revertingTabs = new Set();
 const snapshotMutationTabs = new Set();
+const RECOVERY_ACTIVE_MESSAGE = 'A document recovery operation is already running on this tab.';
+const RUN_BLOCKED_MESSAGE = 'Wait for the active document recovery operation on this tab to finish before starting an agent run.';
+
+function recoveryActiveOn(tabId) {
+  return revertingTabs.has(tabId) || snapshotMutationTabs.has(tabId);
+}
 
 async function handleEditCheckpointRevert(payload) {
-  if (revertingTabs.has(payload.tabId) || snapshotMutationTabs.has(payload.tabId)) throw coded('EDIT_REVERT_ACTIVE', 'A document recovery operation is already running on this tab.');
+  if (recoveryActiveOn(payload.tabId)) throw codedError('EDIT_REVERT_ACTIVE', RECOVERY_ACTIVE_MESSAGE);
   revertingTabs.add(payload.tabId);
   try {
     return await revertEditCheckpoint(payload, { activeRuns: getActiveRunSummaries() });
@@ -34,9 +41,7 @@ async function handleEditCheckpointRevert(payload) {
 }
 
 async function handleSnapshotMutation(payload, operation) {
-  if (revertingTabs.has(payload.tabId) || snapshotMutationTabs.has(payload.tabId)) {
-    throw coded('DOCUMENT_SNAPSHOT_ACTIVE', 'A document recovery operation is already running on this tab.');
-  }
+  if (recoveryActiveOn(payload.tabId)) throw codedError('DOCUMENT_SNAPSHOT_ACTIVE', RECOVERY_ACTIVE_MESSAGE);
   snapshotMutationTabs.add(payload.tabId);
   try {
     return await operation(payload, { activeRuns: getActiveRunSummaries() });
@@ -72,7 +77,7 @@ function pruneQuickAttaches() {
 
 async function dispatchQuickAttach(type, sender) {
   const source = quickAttachSource(sender);
-  if (!source) throw coded('QUICK_ATTACH_SOURCE_MISSING', 'Quick attachment requires an originating tab and window.');
+  if (!source) throw codedError('QUICK_ATTACH_SOURCE_MISSING', 'Quick attachment requires an originating tab and window.');
   const payload = { ...source, eventId: `quick-${crypto.randomUUID()}` };
   pendingQuickAttaches.push({ type, payload, createdAt: Date.now() });
   pruneQuickAttaches();
@@ -159,7 +164,7 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 
 async function activeTypstTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !isTypstAppUrl(tab.url)) throw coded('NO_TYPST_TAB', 'No active typst.app tab.');
+  if (!tab?.id || !isTypstAppUrl(tab.url)) throw codedError('NO_TYPST_TAB', 'No active typst.app tab.');
   return tab;
 }
 
@@ -171,9 +176,9 @@ async function forwardToActiveTab(type, payload = {}) {
 
 async function forwardToSelectedTab(tabId, type, payload = {}) {
   if (tabId == null) return forwardToActiveTab(type, payload);
-  if (!Number.isInteger(tabId) || tabId < 0) throw coded('INVALID_TAB_ID', 'tabId must be a non-negative integer.');
+  if (!Number.isInteger(tabId) || tabId < 0) throw codedError('INVALID_TAB_ID', 'tabId must be a non-negative integer.');
   const tab = await chrome.tabs.get(tabId);
-  if (!isTypstAppUrl(tab?.url)) throw coded('NOT_TYPST_TAB', 'The selected tab is not a typst.app page.');
+  if (!isTypstAppUrl(tab?.url)) throw codedError('NOT_TYPST_TAB', 'The selected tab is not a typst.app page.');
   const response = await chrome.tabs.sendMessage(tabId, buildRequest(type, payload));
   return unwrapResponse(response);
 }
@@ -227,8 +232,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case PROTOCOL.DOCUMENT_SNAPSHOT_DELETE:
       return respond(sendResponse, message, handleSnapshotMutation(payload, deleteDocumentSnapshotForEditor));
 
-    case PROTOCOL.OPEN_PROJECT_TAB:
-      return respond(sendResponse, message, chrome.tabs.create({ url: `https://typst.app/project/${encodeURIComponent(payload.projectId || '')}` }).then(tab => ({ ok: true, tabId: tab?.id || null })));
+    case PROTOCOL.OPEN_PROJECT_TAB: {
+      const url = `https://typst.app/project/${encodeURIComponent(payload.projectId || '')}`;
+      return respond(sendResponse, message, chrome.tabs.create({ url }).then(tab => ({ ok: true, tabId: tab?.id || null })));
+    }
 
     case PROTOCOL.LOAD_CUSTOM_TOOLS: return respond(sendResponse, message, loadCustomTools());
     case PROTOCOL.SAVE_CUSTOM_TOOLS: return respond(sendResponse, message, saveCustomTools(payload.tools || [], payload.mutation));
@@ -246,19 +253,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case PROTOCOL.AI_RUN_RESERVE: {
       const valid = validateRunReserveEnvelope(message);
-      if (!valid.ok) return respond(sendResponse, message, Promise.reject(coded(valid.error.code, valid.error.message)));
-      if (revertingTabs.has(payload.tabId) || snapshotMutationTabs.has(payload.tabId)) return respond(sendResponse, message, Promise.reject(coded('DOCUMENT_RECOVERY_ACTIVE', 'Wait for the active document recovery operation on this tab to finish before starting an agent run.')));
+      if (!valid.ok) return respond(sendResponse, message, Promise.reject(codedError(valid.error.code, valid.error.message)));
+      if (recoveryActiveOn(payload.tabId)) {
+        return respond(sendResponse, message, Promise.reject(codedError('DOCUMENT_RECOVERY_ACTIVE', RUN_BLOCKED_MESSAGE)));
+      }
       return respond(sendResponse, message, Promise.resolve().then(() => reserveRun(message)));
     }
     case PROTOCOL.AI_STREAM_START: {
       const valid = validateRunStartEnvelope(message);
-      if (!valid.ok) return respond(sendResponse, message, Promise.reject(coded(valid.error.code, valid.error.message)));
-      if (revertingTabs.has(payload.tabId) || snapshotMutationTabs.has(payload.tabId)) return respond(sendResponse, message, Promise.reject(coded('DOCUMENT_RECOVERY_ACTIVE', 'Wait for the active document recovery operation on this tab to finish before starting an agent run.')));
+      if (!valid.ok) return respond(sendResponse, message, Promise.reject(codedError(valid.error.code, valid.error.message)));
+      if (recoveryActiveOn(payload.tabId)) {
+        return respond(sendResponse, message, Promise.reject(codedError('DOCUMENT_RECOVERY_ACTIVE', RUN_BLOCKED_MESSAGE)));
+      }
       return respond(sendResponse, message, handleStreamStart(message));
     }
     case PROTOCOL.AI_STREAM_CANCEL: {
       const valid = validateRunCancelEnvelope(message);
-      if (!valid.ok) return respond(sendResponse, message, Promise.reject(coded(valid.error.code, valid.error.message)));
+      if (!valid.ok) return respond(sendResponse, message, Promise.reject(codedError(valid.error.code, valid.error.message)));
       return respond(sendResponse, message, abortRun(message.runId));
     }
     case PROTOCOL.AI_RUN_STATUS:
@@ -282,9 +293,3 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
   }
 });
-
-function coded(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-}

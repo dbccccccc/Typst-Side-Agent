@@ -8,6 +8,7 @@ import {
   createDocumentSnapshot, deleteDocumentSnapshot, listDocumentSnapshots, loadDocumentSnapshot
 } from './storage.js';
 import { buildUnifiedDiff, editorFileLabel } from './edit-preview.js';
+import { codedError } from '../shared/errors.js';
 
 function defaultAdapters() {
   return {
@@ -104,7 +105,7 @@ export async function restoreDocumentSnapshot(payload, options = {}) {
   }, { runId });
   const result = response?.result || response;
   if (result?.ok !== true) {
-    throw coded(result?.code || 'DOCUMENT_SNAPSHOT_RESTORE_FAILED', result?.error || 'The Typst editor rejected the snapshot restore transaction.');
+    throw codedError(result?.code || 'DOCUMENT_SNAPSHOT_RESTORE_FAILED', result?.error || 'The Typst editor rejected the snapshot restore transaction.');
   }
 
   return {
@@ -131,51 +132,47 @@ export async function deleteDocumentSnapshotForEditor(payload, options = {}) {
 
 async function loadScopedSnapshot(adapters, payload) {
   const snapshot = await adapters.loadDocumentSnapshot(payload.snapshotId);
-  if (!snapshot) throw coded('DOCUMENT_SNAPSHOT_NOT_FOUND', 'This document snapshot has expired or is no longer available.');
-  if (snapshot.projectId !== payload.projectId) throw coded('DOCUMENT_SNAPSHOT_SCOPE_MISMATCH', 'This snapshot belongs to a different Typst project.');
+  if (!snapshot) throw codedError('DOCUMENT_SNAPSHOT_NOT_FOUND', 'This document snapshot has expired or is no longer available.');
+  if (snapshot.projectId !== payload.projectId) throw codedError('DOCUMENT_SNAPSHOT_SCOPE_MISMATCH', 'This snapshot belongs to a different Typst project.');
   if (snapshot.kind === DOCUMENT_SNAPSHOT_KINDS.AUTOMATIC && snapshot.sessionId !== payload.sessionId) {
-    throw coded('DOCUMENT_SNAPSHOT_SCOPE_MISMATCH', 'This automatic snapshot belongs to a different chat.');
+    throw codedError('DOCUMENT_SNAPSHOT_SCOPE_MISMATCH', 'This automatic snapshot belongs to a different chat.');
   }
   return snapshot;
 }
 
 async function assertSnapshotIntegrity(adapters, snapshot) {
-  if (typeof snapshot.text !== 'string') throw coded('DOCUMENT_SNAPSHOT_BODY_MISSING', 'The saved document source is unavailable.');
+  if (typeof snapshot.text !== 'string') throw codedError('DOCUMENT_SNAPSHOT_BODY_MISSING', 'The saved document source is unavailable.');
   const hash = await adapters.sha256Text(snapshot.text);
   if (hash !== snapshot.textHash || snapshot.text.length !== snapshot.textLength) {
-    throw coded('DOCUMENT_SNAPSHOT_BODY_INVALID', 'The saved document snapshot failed its integrity check.');
+    throw codedError('DOCUMENT_SNAPSHOT_BODY_INVALID', 'The saved document snapshot failed its integrity check.');
   }
 }
 
 async function readEditContext(adapters, tabId) {
   const context = await adapters.sendPageRequest(tabId, PROTOCOL.PAGE_GET_CONTEXT, { projection: 'edit' });
   if (!context || typeof context.fullText !== 'string' || typeof context.editorToken !== 'string' || !context.editorToken) {
-    throw coded('DOCUMENT_SNAPSHOT_CONTEXT_UNAVAILABLE', context?.error || 'The live Typst editor could not be read.');
+    throw codedError('DOCUMENT_SNAPSHOT_CONTEXT_UNAVAILABLE', context?.error || 'The live Typst editor could not be read.');
   }
   return context;
 }
 
 function assertFocusedFile(snapshot, context) {
   if (editorFileLabel(context.workspace) !== snapshot.fileLabel) {
-    throw coded('DOCUMENT_SNAPSHOT_FILE_MISMATCH', `Open ${snapshot.fileLabel} before restoring this snapshot.`);
+    throw codedError('DOCUMENT_SNAPSHOT_FILE_MISMATCH', `Open ${snapshot.fileLabel} before restoring this snapshot.`);
   }
 }
 
 async function assertTabScope(adapters, tabId, projectId) {
   const tab = await adapters.tabsGet(tabId);
-  if (!tab?.url?.startsWith(TYPST_APP_PREFIX)) throw coded('NOT_TYPST_TAB', 'The selected tab is no longer a typst.app page.');
+  if (!tab?.url?.startsWith(TYPST_APP_PREFIX)) throw codedError('NOT_TYPST_TAB', 'The selected tab is no longer a typst.app page.');
   const match = tab.url.match(/typst\.app\/project\/([^/?#]+)/);
-  if (!match || match[1] !== projectId) throw coded('DOCUMENT_SNAPSHOT_PROJECT_MISMATCH', 'The selected tab no longer shows the project that owns this snapshot.');
+  if (!match || match[1] !== projectId) {
+    throw codedError('DOCUMENT_SNAPSHOT_PROJECT_MISMATCH', 'The selected tab no longer shows the project that owns this snapshot.');
+  }
 }
 
 function assertNoActiveRun(tabId, activeRuns = []) {
   if ((activeRuns || []).some(run => run.tabId === tabId)) {
-    throw coded('DOCUMENT_SNAPSHOT_RUN_ACTIVE', 'Wait for the active agent run on this tab to finish before changing document snapshots.');
+    throw codedError('DOCUMENT_SNAPSHOT_RUN_ACTIVE', 'Wait for the active agent run on this tab to finish before changing document snapshots.');
   }
-}
-
-function coded(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
 }

@@ -4,7 +4,8 @@
  */
 (function () {
   const bridge = globalThis.__typstAgentBridgeProtocol;
-  if (!bridge) return;
+  const shared = globalThis.__typstAgentShared;
+  if (!bridge || !shared) return;
   const RUNTIME_VERSION = 11;
   const previousRuntime = window.__typstAgentMainRuntime;
   if (previousRuntime?.version === RUNTIME_VERSION) return;
@@ -18,14 +19,16 @@
   window.__typstAgentMainLoaded = true;
 
   const { TYPES } = bridge;
+  const L = shared.PAGE_LIMITS;
   const bridgeNonces = new Set();
-  const MAX_BRIDGE_NONCES = 8;
-  const MAX_PAGE_DOCUMENT_CHARS = 1_048_576;
-  const MAX_PAGE_SELECTION_CHARS = 65_536;
-  const MAX_PAGE_WORKSPACE_CHARS = 65_536;
-  const MAX_PAGE_DIAGNOSTICS = 200;
-  const MAX_PAGE_DIAGNOSTICS_CHARS = 262_144;
-  const MAX_PREVIEW_DATA_URL_CHARS = 2_097_152;
+  const MAX_BRIDGE_NONCES = L.MAX_BRIDGE_NONCES;
+  const MAX_PAGE_DOCUMENT_CHARS = L.MAX_DOCUMENT_CHARS;
+  const MAX_PAGE_SELECTION_CHARS = L.MAX_SELECTION_CHARS;
+  const MAX_PAGE_WORKSPACE_CHARS = L.MAX_WORKSPACE_CHARS;
+  const MAX_PAGE_DIAGNOSTICS = L.MAX_DIAGNOSTICS;
+  const MAX_PAGE_DIAGNOSTICS_CHARS = L.MAX_DIAGNOSTICS_CHARS;
+  const MAX_PREVIEW_DATA_URL_CHARS = L.MAX_PREVIEW_DATA_URL_CHARS;
+  const MAX_INLINE_DIFF_ROWS = L.MAX_INLINE_DIFF_ROWS;
   let activeBridgeNonce = null;
   const cancelledPageRequests = new Map();
 
@@ -98,34 +101,10 @@
     return { error: 'Workspace metadata was omitted because it exceeded the bridge limit.' };
   }
 
-  const DEFAULT_EDITOR_FILE_LABEL = 'Current Typst document';
-  const PROJECT_FILE_BASENAME_RE = /\.[a-z0-9][a-z0-9+_-]{0,31}$/i;
-
-  function normalizeProjectRelativePath(value) {
-    let relativePath = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
-    relativePath = relativePath.replace(/^\.\/+/, '').replace(/^\/+/, '').replace(/\/{2,}/g, '/');
-    if (!relativePath || relativePath.length > 240 || /^[a-z][a-z0-9+.-]*:/i.test(relativePath)) return null;
-    const segments = relativePath.split('/');
-    if (segments.some(segment => !segment || segment === '.' || segment === '..' || /[\0\r\n]/.test(segment))) return null;
-    return PROJECT_FILE_BASENAME_RE.test(segments.at(-1) || '') ? relativePath : null;
-  }
-
-  function activeEditorFile(workspace) {
-    const value = workspace?.active_editor_file;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const relativePath = normalizeProjectRelativePath(value.relativePath);
-    if (!relativePath) return null;
-    return { ...value, relativePath };
-  }
-
-  function editorFileLabel(workspace) {
-    if (!workspace || typeof workspace !== 'object') return DEFAULT_EDITOR_FILE_LABEL;
-    const active = activeEditorFile(workspace);
-    if (active) return active.relativePath;
-    const candidates = [workspace.focused_element_file_hint, workspace.detail_path];
-    const label = candidates.map(normalizeProjectRelativePath).find(Boolean);
-    return label || DEFAULT_EDITOR_FILE_LABEL;
-  }
+  // The worker computes this label with the same shared function, so the
+  // stale-file guard on every editor write compares like with like.
+  const DEFAULT_EDITOR_FILE_LABEL = shared.DEFAULT_EDIT_FILE_LABEL;
+  const editorFileLabel = shared.editorFileLabel;
 
   function liveEditorFileLabel() {
     try {
@@ -189,7 +168,11 @@
       };
     }
     if (projection === 'edit' && state.doc.length > MAX_PAGE_DOCUMENT_CHARS) {
-      return { error: `The document exceeds the ${MAX_PAGE_DOCUMENT_CHARS}-character safe edit limit.`, docLength: state.doc.length, lineCount: state.doc.lines };
+      return {
+        error: `The document exceeds the ${MAX_PAGE_DOCUMENT_CHARS}-character safe edit limit.`,
+        docLength: state.doc.length,
+        lineCount: state.doc.lines
+      };
     }
     const truncated = state.doc.length > MAX_PAGE_DOCUMENT_CHARS;
     return {
@@ -201,13 +184,12 @@
 
   const INLINE_DIFF_STYLE_ID = 'typst-side-agent-inline-diff-style';
   const INLINE_DIFF_LAYER_ID = 'typst-side-agent-inline-diff-rows';
-  const MAX_INLINE_DIFF_ROWS = 2000;
   let activeEditPreview = null;
 
   function validatePreparedEditSnapshot(expectedText, expectedEditorToken, expectedFileLabel, changes) {
     const view = findEditorView();
     if (!view) return { ok: false, code: 'EDITOR_UNAVAILABLE', error: 'EditorView not found' };
-    if (typeof expectedText !== 'string' || !Array.isArray(changes) || changes.length === 0 || changes.length > 128) {
+    if (typeof expectedText !== 'string' || !Array.isArray(changes) || changes.length === 0 || changes.length > L.MAX_PREPARED_CHANGES) {
       return { ok: false, code: 'INVALID_PREPARED_EDIT', error: 'Prepared edit payload is invalid.' };
     }
     const currentText = view.state.doc.toString();
@@ -243,14 +225,18 @@
     const normalized = [];
     for (let index = 0; index < changes.length; index++) {
       const change = changes[index];
-      if (!change || !Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < 0 || change.to < change.from || change.to > currentText.length || typeof change.insert !== 'string') {
+      const validRange = !!change && Number.isInteger(change.from) && Number.isInteger(change.to)
+        && change.from >= 0 && change.to >= change.from && change.to <= currentText.length;
+      if (!validRange || typeof change.insert !== 'string') {
         return { ok: false, code: 'INVALID_PREPARED_EDIT', error: `Prepared edit #${index + 1} has an invalid range.` };
       }
       if (index > 0 && change.from < previousTo) {
         return { ok: false, code: 'INVALID_PREPARED_EDIT', error: `Prepared edit #${index + 1} overlaps a previous range.` };
       }
       insertedChars += change.insert.length;
-      if (insertedChars > 1_000_000) return { ok: false, code: 'INVALID_PREPARED_EDIT', error: 'Prepared edit inserts too much text.' };
+      if (insertedChars > L.MAX_PREPARED_INSERT_CHARS) {
+        return { ok: false, code: 'INVALID_PREPARED_EDIT', error: 'Prepared edit inserts too much text.' };
+      }
       previousTo = change.to;
       normalized.push({ from: change.from, to: change.to, insert: change.insert });
     }
@@ -546,7 +532,8 @@
     return { ok: true, cleared: true };
   }
 
-  function showPreparedEditPreview(runId, expectedText, expectedEditorToken, expectedFileLabel, changes, callId, diffPreview) {
+  function showPreparedEditPreview(runId, payload) {
+    const { expectedText, expectedEditorToken, expectedFileLabel, changes, callId, preview: diffPreview } = payload;
     const checked = validatePreparedEditSnapshot(expectedText, expectedEditorToken, expectedFileLabel, changes);
     if (!checked.ok) return checked;
     if (typeof runId !== 'string' || !runId) return { ok: false, code: 'INVALID_RUN_ID', error: 'Inline preview requires a run identity.' };
@@ -624,7 +611,8 @@
   }
 
   /** Apply only the exact change set the user reviewed against the exact source they saw. */
-  function applyPreparedEdit(runId, callId, expectedText, expectedEditorToken, expectedFileLabel, changes, reviewedDiff) {
+  function applyPreparedEdit(runId, payload) {
+    const { callId, expectedText, expectedEditorToken, expectedFileLabel, changes, reviewedDiff } = payload;
     if (activeEditPreview && (activeEditPreview.runId !== runId || activeEditPreview.callId !== callId)) {
       return { ok: false, code: 'EDIT_PREVIEW_BUSY', error: 'Another run owns the active inline editor preview.' };
     }
@@ -943,13 +931,13 @@
     for (const diagnostic of results) {
       if (diagnostics.length >= MAX_PAGE_DIAGNOSTICS) break;
       const bounded = {
-        severity: String(diagnostic?.severity || 'info').slice(0, 16),
-        message: String(diagnostic?.message || '').slice(0, 2_000),
+        severity: String(diagnostic?.severity || 'info').slice(0, L.MAX_DIAGNOSTIC_SEVERITY_CHARS),
+        message: String(diagnostic?.message || '').slice(0, L.MAX_DIAGNOSTIC_MESSAGE_CHARS),
         line: Number.isInteger(diagnostic?.line) && diagnostic.line >= 0 ? diagnostic.line : null,
         column: Number.isInteger(diagnostic?.column) && diagnostic.column >= 0 ? diagnostic.column : null,
-        kind: String(diagnostic?.kind || 'typst').slice(0, 32),
-        original: diagnostic?.original == null ? null : String(diagnostic.original).slice(0, 500),
-        suggestion: diagnostic?.suggestion == null ? null : String(diagnostic.suggestion).slice(0, 500)
+        kind: String(diagnostic?.kind || 'typst').slice(0, L.MAX_DIAGNOSTIC_KIND_CHARS),
+        original: diagnostic?.original == null ? null : String(diagnostic.original).slice(0, L.MAX_DIAGNOSTIC_SNIPPET_CHARS),
+        suggestion: diagnostic?.suggestion == null ? null : String(diagnostic.suggestion).slice(0, L.MAX_DIAGNOSTIC_SNIPPET_CHARS)
       };
       const length = JSON.stringify(bounded).length;
       if (serializedChars + length > MAX_PAGE_DIAGNOSTICS_CHARS - 1_000) break;
@@ -1128,7 +1116,13 @@
       responseError = Object.assign(new Error(`${request.type} produced an invalid or oversized response.`), { code: 'INVALID_PAGE_RESPONSE' });
     }
     const payload = responseError
-      ? { ok: false, error: { code: responseError.code || 'PAGE_REQUEST_FAILED', message: String(responseError.message || responseError).slice(0, 2_000) } }
+      ? {
+          ok: false,
+          error: {
+            code: responseError.code || 'PAGE_REQUEST_FAILED',
+            message: String(responseError.message || responseError).slice(0, L.MAX_ERROR_CHARS)
+          }
+        }
       : { ok: true, data: result };
     window.postMessage(bridge.envelope(TYPES.RESPONSE, payload, {
       requestId: request.requestId,
@@ -1147,7 +1141,7 @@
   function rememberCancelledPageRequest(requestId) {
     const previous = cancelledPageRequests.get(requestId);
     if (previous != null) clearTimeout(previous);
-    const timer = setTimeout(() => cancelledPageRequests.delete(requestId), 12_000);
+    const timer = setTimeout(() => cancelledPageRequests.delete(requestId), L.PAGE_REQUEST_TIMEOUT_MS);
     cancelledPageRequests.set(requestId, timer);
   }
 
@@ -1188,13 +1182,13 @@
           });
           break;
         case TYPES.PAGE_SHOW_EDIT_PREVIEW:
-          result = { result: showPreparedEditPreview(request.runId, request.payload.expectedText, request.payload.expectedEditorToken, request.payload.expectedFileLabel, request.payload.changes, request.payload.callId, request.payload.preview) };
+          result = { result: showPreparedEditPreview(request.runId, request.payload) };
           break;
         case TYPES.PAGE_CLEAR_EDIT_PREVIEW:
           result = { result: clearPreparedEditPreview(request.runId, request.payload.callId) };
           break;
         case TYPES.PAGE_APPLY_EDIT:
-          result = { result: applyPreparedEdit(request.runId, request.payload.callId, request.payload.expectedText, request.payload.expectedEditorToken, request.payload.expectedFileLabel, request.payload.changes, request.payload.reviewedDiff) };
+          result = { result: applyPreparedEdit(request.runId, request.payload) };
           if (result.result.ok) clearPreparedEditPreview(request.runId, request.payload.callId);
           break;
         default: return;

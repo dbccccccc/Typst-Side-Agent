@@ -4,6 +4,7 @@ import { readResponseTextBounded } from '../shared/bounded-response.js';
 import { validateEndpointUrl } from '../shared/endpoint-policy.js';
 import { validateToolSchema } from '../shared/tool-validation.js';
 import { stableHash } from '../shared/trust-policy.js';
+import { codedError } from '../shared/errors.js';
 
 /**
  * Internal MCP 2026-07-28 Streamable HTTP transport.
@@ -136,7 +137,7 @@ async function rpc(server, method, params = {}, options = {}) {
   const endpoint = validateEndpointUrl(server.url, {
     insecureConfirmedOrigin: server.insecureTransportAcknowledgedOrigin
   });
-  if (!endpoint.ok) throw coded(endpoint.error.code, endpoint.error.message, endpoint.error.details);
+  if (!endpoint.ok) throw codedError(endpoint.error.code, endpoint.error.message, endpoint.error.details);
   const requestId = nextId++;
   let transportParams = params;
   let parameterHeaders = [];
@@ -192,11 +193,11 @@ export async function readResponseAsJsonRpc(response, requestId, signal) {
     errorMessage: 'MCP response exceeds the 2 MiB limit.'
   });
   try { return JSON.parse(text); }
-  catch { throw coded('MCP_INVALID_JSON', `Unexpected MCP response (${response.status}): ${text.slice(0, 200)}`); }
+  catch { throw codedError('MCP_INVALID_JSON', `Unexpected MCP response (${response.status}): ${text.slice(0, 200)}`); }
 }
 
 export async function readSseResponse(stream, requestId, signal) {
-  if (!stream?.getReader) throw coded('MCP_INVALID_STREAM', 'MCP SSE response has no readable body.');
+  if (!stream?.getReader) throw codedError('MCP_INVALID_STREAM', 'MCP SSE response has no readable body.');
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -212,7 +213,7 @@ export async function readSseResponse(stream, requestId, signal) {
     try { parsed = JSON.parse(raw); }
     catch {
       malformed += 1;
-      if (malformed > 8) throw coded('MCP_MALFORMED_SSE', 'Too many malformed MCP SSE events.');
+      if (malformed > 8) throw codedError('MCP_MALFORMED_SSE', 'Too many malformed MCP SSE events.');
       return null;
     }
     if (parsed?.id === requestId) return parsed;
@@ -228,11 +229,11 @@ export async function readSseResponse(stream, requestId, signal) {
 
   try {
     while (true) {
-      if (signal?.aborted) throw coded('CANCELLED', 'MCP request cancelled.');
+      if (signal?.aborted) throw codedError('CANCELLED', 'MCP request cancelled.');
       const { value, done } = await raceWithSignal(reader.read(), signal);
       if (value) {
         bytes += value.byteLength;
-        if (bytes > LIMITS.MAX_MCP_RESPONSE_BYTES) throw coded('MCP_RESPONSE_TOO_LARGE', 'MCP response exceeds the 2 MiB limit.');
+        if (bytes > LIMITS.MAX_MCP_RESPONSE_BYTES) throw codedError('MCP_RESPONSE_TOO_LARGE', 'MCP response exceeds the 2 MiB limit.');
         buffer += decoder.decode(value, { stream: !done });
       } else if (done) buffer += decoder.decode();
 
@@ -253,7 +254,7 @@ export async function readSseResponse(stream, requestId, signal) {
     }
     const final = consumeEvent();
     if (final) return final;
-    throw coded('MCP_STREAM_ENDED', 'MCP stream ended before the matching response.');
+    throw codedError('MCP_STREAM_ENDED', 'MCP stream ended before the matching response.');
   } finally {
     try { await reader.cancel(); } catch { /* already closed */ }
   }
@@ -276,10 +277,12 @@ export async function listMcpToolsDetailed(server, signal, options = {}) {
   let cacheScope = 'private';
   do {
     pages += 1;
-    if (pages > LIMITS.MAX_MCP_PAGES) throw coded('MCP_PAGE_LIMIT', `MCP tools/list exceeded ${LIMITS.MAX_MCP_PAGES} pages.`);
+    if (pages > LIMITS.MAX_MCP_PAGES) throw codedError('MCP_PAGE_LIMIT', `MCP tools/list exceeded ${LIMITS.MAX_MCP_PAGES} pages.`);
     const params = cursor ? { cursor } : {};
     const result = await rpc(server, 'tools/list', params, { signal, timeoutMs: LIMITS.MCP_DISCOVERY_TIMEOUT_MS });
-    if (result?.resultType && result.resultType !== 'complete') throw coded('MCP_INPUT_REQUIRED_UNSUPPORTED', 'MCP tools/list requested unsupported multi-round input.');
+    if (result?.resultType && result.resultType !== 'complete') {
+      throw codedError('MCP_INPUT_REQUIRED_UNSUPPORTED', 'MCP tools/list requested unsupported multi-round input.');
+    }
     for (const tool of Array.isArray(result?.tools) ? result.tools : []) {
       if (!tool || typeof tool.name !== 'string' || seen.has(tool.name)) {
         errors.push({ code: 'DUPLICATE_OR_INVALID_TOOL', name: tool?.name || '', message: 'Tool name is missing or duplicated.' });
@@ -292,7 +295,7 @@ export async function listMcpToolsDetailed(server, signal, options = {}) {
       }
       seen.add(tool.name);
       tools.push(tool);
-      if (tools.length > LIMITS.MAX_MCP_TOOLS) throw coded('MCP_TOOL_LIMIT', `MCP discovery exceeded ${LIMITS.MAX_MCP_TOOLS} tools.`);
+      if (tools.length > LIMITS.MAX_MCP_TOOLS) throw codedError('MCP_TOOL_LIMIT', `MCP discovery exceeded ${LIMITS.MAX_MCP_TOOLS} tools.`);
     }
     cursor = typeof result?.nextCursor === 'string' && result.nextCursor ? result.nextCursor : null;
     if (Number.isFinite(result?.ttlMs)) ttlMs = Math.min(ttlMs, Math.max(0, result.ttlMs));
@@ -312,7 +315,9 @@ export async function listMcpTools(server, signal, options = {}) {
 
 export async function callMcpTool(server, name, args, signal, toolDefinition = null) {
   const result = await rpc(server, 'tools/call', { name, arguments: args || {} }, { signal, toolDefinition });
-  if (result?.resultType === 'input_required') throw coded('MCP_INPUT_REQUIRED_UNSUPPORTED', 'This MCP tool requires multi-round user input, which this client does not expose yet.');
+  if (result?.resultType === 'input_required') {
+    throw codedError('MCP_INPUT_REQUIRED_UNSUPPORTED', 'This MCP tool requires multi-round user input, which this client does not expose yet.');
+  }
   return result;
 }
 
@@ -332,7 +337,11 @@ export function renderMcpContent(result) {
 }
 
 function cacheKey(server) {
-  const headerDigest = stableHash(Object.entries(server.headers || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k.toLowerCase()}:${v}`).join('|'));
+  const canonicalHeaders = Object.entries(server.headers || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k.toLowerCase()}:${v}`)
+    .join('|');
+  const headerDigest = stableHash(canonicalHeaders);
   return `${server.id}|${server.url}|${server.protocolMode || 'auto'}|${headerDigest}`;
 }
 
@@ -346,23 +355,16 @@ function cloneJson(value) {
 
 function httpError(status, data) {
   if (data?.error) return jsonRpcError(data.error, status);
-  return coded('MCP_HTTP_ERROR', `MCP HTTP ${status}.`, { status });
+  return codedError('MCP_HTTP_ERROR', `MCP HTTP ${status}.`, { status });
 }
 
 function jsonRpcError(error, status = null) {
   const unsupported = error?.code === -32022;
-  return coded(
+  return codedError(
     unsupported ? 'UNSUPPORTED_MCP_VERSION' : 'MCP_JSON_RPC_ERROR',
     unsupported
       ? `Server does not support MCP ${MCP_PROTOCOL_VERSION}. Supported versions: ${(error?.data?.supported || []).join(', ') || 'not provided'}.`
       : `MCP error: ${error?.message || JSON.stringify(error)}`,
     { status, rpcCode: error?.code, data: error?.data }
   );
-}
-
-function coded(code, message, details) {
-  const error = new Error(message);
-  error.code = code;
-  if (details != null) error.details = details;
-  return error;
 }

@@ -17,13 +17,46 @@ process.stdout.write(run.stdout || '');
 process.stderr.write(run.stderr || '');
 if (run.status !== 0) process.exit(run.status || 1);
 
+/**
+ * Risk-weighted line-coverage floors. Module basenames are unique across src/
+ * so the Node coverage table can be matched by name. Raise a floor when a
+ * module gains tests; never lower one without a review note.
+ */
 const floors = new Map([
-  ['agent.js', 65],
+  // Worker: run orchestration and tool execution
+  ['run-loop.js', 90],
+  ['tool-preflight.js', 85],
+  ['editor-tool-runner.js', 70],
+  ['read-tool-runner.js', 85],
+  ['external-tool-runner.js', 75],
+  ['page-bridge.js', 80],
+  ['run-transcript.js', 90],
+  ['session-title.js', 90],
+  // Worker: transports and validation
   ['mcp.js', 80],
   ['provider.js', 85],
-  ['storage.js', 75],
   ['tool-validation.js', 80],
+  ['protocol.js', 80],
+  ['edit-preview.js', 90],
+  ['edit-revert.js', 80],
+  // Worker: storage
+  ['storage-core.js', 85],
+  ['session-store.js', 85],
+  ['checkpoint-store.js', 85],
+  ['snapshot-store.js', 80],
+  ['settings-store.js', 75],
+  ['integration-store.js', 90],
+  // Content scripts (loaded through vm in tests)
   ['float-controller.js', 85],
+  // Side panel
+  ['chat.js', 85],
+  ['stream-view.js', 90],
+  ['tool-blocks.js', 85],
+  ['revert-control.js', 85],
+  ['markdown.js', 85],
+  ['send-controller.js', 85],
+  ['quick-attach-controller.js', 90],
+  ['snapshot-controller.js', 80],
   ['registry-controller.js', 80],
   ['run-ui-controller.js', 90],
   ['session-import.js', 85],

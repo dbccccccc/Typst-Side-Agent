@@ -70,11 +70,13 @@ export default [
     rules: correctnessRules
   },
   {
-    files: ['test/browser/**/*.mjs'],
+    // Side-panel tests that run against a jsdom window install browser globals.
+    files: ['test/**/*.dom.test.mjs', 'test/browser/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
       globals: { ...globals.node, ...globals.browser, ...globals.webextensions }
-    }
+    },
+    rules: correctnessRules
   }
 ];

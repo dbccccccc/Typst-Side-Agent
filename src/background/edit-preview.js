@@ -1,6 +1,7 @@
-import { DEFAULT_EDIT_FILE_LABEL } from '../shared/edit-checkpoint.js';
 import { LIMITS } from '../shared/constants.js';
-import { activeEditorFileFromContext, normalizeProjectRelativePath } from '../shared/active-file.js';
+import { activeEditorFileFromContext, editorFileLabel } from '../shared/active-file.js';
+
+export { editorFileLabel };
 
 const EDIT_TOOL_NAMES = Object.freeze([
   'replace_lines',
@@ -25,7 +26,9 @@ export function isEditorEditTool(name) {
 export function prepareEditorEdit(name, args, context) {
   if (!isEditorEditTool(name)) return failure('UNSUPPORTED_EDIT_TOOL', `Cannot preview editor tool: ${name}`);
   if (!context || typeof context.fullText !== 'string') return failure('EDIT_CONTEXT_UNAVAILABLE', 'The live Typst document could not be read for preview.');
-  if (typeof context.editorToken !== 'string' || !context.editorToken) return failure('EDIT_CONTEXT_UNAVAILABLE', 'The live Typst editor identity is unavailable. Reload the extension and retry.');
+  if (typeof context.editorToken !== 'string' || !context.editorToken) {
+    return failure('EDIT_CONTEXT_UNAVAILABLE', 'The live Typst editor identity is unavailable. Reload the extension and retry.');
+  }
   const baseText = context.fullText;
   if (baseText.length > MAX_DOCUMENT_CHARS) {
     return failure('EDIT_PREVIEW_TOO_LARGE', `The document is too large to preview safely (${baseText.length} characters; limit ${MAX_DOCUMENT_CHARS}).`);
@@ -107,7 +110,10 @@ export function buildUnifiedDiff(before, after) {
     }
   }
   if (previewChars > MAX_DIFF_TEXT_CHARS) {
-    return failure('EDIT_PREVIEW_TOO_LARGE', `The proposed diff contains too much changed text to review safely (${previewChars} characters; limit ${MAX_DIFF_TEXT_CHARS}).`);
+    return failure(
+      'EDIT_PREVIEW_TOO_LARGE',
+      `The proposed diff contains too much changed text to review safely (${previewChars} characters; limit ${MAX_DIFF_TEXT_CHARS}).`
+    );
   }
 
   const ranges = hunkRanges(changedIndexes, rows.length, DIFF_CONTEXT_LINES);
@@ -189,7 +195,9 @@ function resolveChanges(name, args, context, text) {
     if (typeof args.text !== 'string') return failure('INVALID_EDIT_ARGUMENTS', 'replace_selection requires string text.');
     const from = integer(context.selectionFrom);
     const to = integer(context.selectionTo);
-    if (from == null || to == null || from < 0 || to <= from || to > text.length) return failure('EDIT_CONTEXT_UNAVAILABLE', 'There is no current editor selection to replace.');
+    if (from == null || to == null || from < 0 || to <= from || to > text.length) {
+      return failure('EDIT_CONTEXT_UNAVAILABLE', 'There is no current editor selection to replace.');
+    }
     return { ok: true, changes: [{ from, to, insert: args.text }] };
   }
 
@@ -197,11 +205,15 @@ function resolveChanges(name, args, context, text) {
 }
 
 function normalizeChanges(input, textLength) {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_CHANGES) return failure('INVALID_EDIT_CHANGES', 'The prepared edit has an invalid number of changes.');
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_CHANGES) {
+    return failure('INVALID_EDIT_CHANGES', 'The prepared edit has an invalid number of changes.');
+  }
   const changes = input.map(change => ({ from: change.from, to: change.to, insert: change.insert })).sort((a, b) => a.from - b.from || a.to - b.to);
   for (let index = 0; index < changes.length; index++) {
     const change = changes[index];
-    if (!Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < 0 || change.to < change.from || change.to > textLength || typeof change.insert !== 'string') {
+    const validRange = Number.isInteger(change.from) && Number.isInteger(change.to)
+      && change.from >= 0 && change.to >= change.from && change.to <= textLength;
+    if (!validRange || typeof change.insert !== 'string') {
       return failure('INVALID_EDIT_CHANGES', `Prepared edit #${index + 1} has an invalid range.`);
     }
     if (index > 0 && change.from < changes[index - 1].to) return failure('EDIT_RANGES_OVERLAP', `Prepared edit #${index + 1} overlaps a previous edit.`);
@@ -346,14 +358,6 @@ function precedingLineEndingLength(text, offset) {
   return offset > 1 && text.charCodeAt(offset - 2) === 13 ? 2 : 1;
 }
 
-export function editorFileLabel(value) {
-  const activeFile = activeEditorFileFromContext(value);
-  if (activeFile) return activeFile.relativePath;
-  const workspace = value?.workspace && typeof value.workspace === 'object' ? value.workspace : value;
-  if (!workspace || typeof workspace !== 'object') return DEFAULT_EDIT_FILE_LABEL;
-  const candidates = [workspace.focused_element_file_hint, workspace.detail_path];
-  return candidates.map(normalizeProjectRelativePath).find(Boolean) || DEFAULT_EDIT_FILE_LABEL;
-}
 
 function lineCount(text) {
   if (!text) return 0;

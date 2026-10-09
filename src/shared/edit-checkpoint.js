@@ -1,3 +1,7 @@
+import { DEFAULT_EDIT_FILE_LABEL } from './active-file.js';
+
+export { DEFAULT_EDIT_FILE_LABEL };
+
 export const EDIT_CHECKPOINT_STATUSES = Object.freeze({
   PREPARED: 'prepared',
   APPLIED: 'applied',
@@ -5,7 +9,6 @@ export const EDIT_CHECKPOINT_STATUSES = Object.freeze({
   REVERTED: 'reverted'
 });
 
-export const DEFAULT_EDIT_FILE_LABEL = 'Current Typst document';
 
 const PUBLIC_STATUSES = new Set([
   EDIT_CHECKPOINT_STATUSES.APPLIED,
@@ -44,7 +47,9 @@ export function applyTextChanges(text, changes) {
   let cursor = 0;
   let output = '';
   for (const change of changes) {
-    if (!change || !Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < cursor || change.to < change.from || change.to > text.length || typeof change.insert !== 'string') {
+    const validRange = !!change && Number.isInteger(change.from) && Number.isInteger(change.to)
+      && change.from >= cursor && change.to >= change.from && change.to <= text.length;
+    if (!validRange || typeof change.insert !== 'string') {
       throw new TypeError('Text changes must be sorted, non-overlapping, and within the source text.');
     }
     output += text.slice(cursor, change.from) + change.insert;

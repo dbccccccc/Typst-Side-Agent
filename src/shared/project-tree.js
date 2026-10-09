@@ -11,7 +11,9 @@ export function normalizeProjectTreePath(value) {
   path = path.replace(/\/{2,}/g, '/');
   if (!path || path.length > MAX_PROJECT_TREE_PATH_CHARS || /^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
   const segments = path.split('/').map(segment => segment.trim());
-  if (segments.some(segment => !segment || segment === '.' || segment === '..' || segment.length > MAX_PROJECT_TREE_SEGMENT_CHARS || /[\0\r\n]/.test(segment))) return null;
+  const invalidSegment = segment => !segment || segment === '.' || segment === '..'
+    || segment.length > MAX_PROJECT_TREE_SEGMENT_CHARS || /[\0\r\n]/.test(segment);
+  if (segments.some(invalidSegment)) return null;
   return segments.join('/');
 }
 

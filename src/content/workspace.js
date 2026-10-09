@@ -10,26 +10,17 @@
  */
 (function (root) {
   'use strict';
+  const shared = root.__typstAgentShared;
+  if (!shared) return;
+  const { normalizeProjectRelativePath, isProjectFileBasename } = shared;
 
   const FILE_EXT_RE = /\.(typ(?:st)?|png|jpe?g|gif|webp|svg|pdf|ttf|otf|woff2?|eot|bib|csv|tsv|md|txt|json|toml|xml|yml|yaml|wasm)$/i;
   const KNOWN_FOLDER_NAMES = /^(fonts|images|src|assets|lib|figures|data|sections|chapters)$/i;
-  const PROJECT_FILE_RE = /\.[a-z0-9][a-z0-9+_-]{0,31}$/i;
   const MAX_PROJECT_TREE_ENTRIES = 128;
   const MAX_PROJECT_TREE_DEPTH = 12;
 
   function cleanInlineText(value, max = 240) {
     return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : '';
-  }
-
-  function normalizeProjectRelativePath(value) {
-    if (typeof value !== 'string') return null;
-    let path = value.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
-    path = path.replace(/\/{2,}/g, '/');
-    if (!path || path.length > 240 || /^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
-    const segments = path.split('/').map(segment => segment.trim());
-    if (segments.some(segment => !segment || segment === '.' || segment === '..' || /[\0\r\n]/.test(segment))) return null;
-    if (!PROJECT_FILE_RE.test(segments[segments.length - 1] || '')) return null;
-    return segments.join('/');
   }
 
   function activeFileRecord(relativePath, projectLabel, source, confidence) {
@@ -94,7 +85,7 @@
     const clean = (segments || []).map(segment => cleanInlineText(segment, 160)).filter(Boolean);
     let fileIndex = -1;
     for (let index = clean.length - 1; index >= 0; index--) {
-      if (PROJECT_FILE_RE.test(clean[index])) { fileIndex = index; break; }
+      if (isProjectFileBasename(clean[index])) { fileIndex = index; break; }
     }
     if (fileIndex < 0) return null;
     const throughFile = clean.slice(0, fileIndex + 1);
@@ -129,7 +120,7 @@
     const candidates = [];
     doc.querySelectorAll(selector).forEach(element => {
       const text = cleanInlineText(element.textContent, 220);
-      if (!text || !PROJECT_FILE_RE.test(text) || /[\r\n<>]/.test(text) || !isInTopHeader(element, doc)) return;
+      if (!text || !isProjectFileBasename(text) || /[\r\n<>]/.test(text) || !isInTopHeader(element, doc)) return;
       const rect = safeRect(element);
       const win = doc.defaultView || window;
       const center = (rect.left + rect.right) / 2;
@@ -165,7 +156,7 @@
       const declaredPath = elementPathAttribute(element);
       if (declaredPath) return activeFileRecord(declaredPath, null, 'selected_tree_path', 'high');
       const text = cleanInlineText(element.textContent, 220);
-      if (text && PROJECT_FILE_RE.test(text) && !/[\r\n<>]/.test(text)) {
+      if (text && isProjectFileBasename(text) && !/[\r\n<>]/.test(text)) {
         return activeFileRecord(text, null, 'selected_tree_filename', 'medium');
       }
     }
@@ -404,7 +395,7 @@
         if (nested || looksLikeCollapsedFolderButton(button)) {
           entries.push({ path, kind: 'folder', state: nested ? 'expanded' : 'collapsed' });
           if (nested) scan(nested, path, depth + 1);
-        } else if (PROJECT_FILE_RE.test(name)) {
+        } else if (isProjectFileBasename(name)) {
           entries.push({ path, kind: 'file' });
         } else {
           entries.push({ path, kind: 'unknown' });
@@ -632,7 +623,7 @@
     const declaredPaths = collectDeclaredPathsIn(filesPanelRoot, doc);
     let active_editor_file = headerBreadcrumbActiveFile(doc) || documentTitleActiveFile(doc) ||
       selectedTreeActiveFile(doc, filesPanelRoot) || bodyBreadcrumbActiveFile(bodyText) ||
-      (focused_element_file_hint && PROJECT_FILE_RE.test(focused_element_file_hint)
+      (focused_element_file_hint && isProjectFileBasename(focused_element_file_hint)
         ? activeFileRecord(focused_element_file_hint, null, 'focused_element', 'low')
         : null);
     active_editor_file = resolveUniqueDeclaredPath(active_editor_file, declaredPaths);
@@ -678,7 +669,10 @@
     if (file_tree_paths_guess.some(p => /[./]/.test(p) && p.includes('/'))) {
       notes += ' file_tree_paths_guess merges DOM path attributes with directory heuristics from detail_path / common folders — not a guaranteed project tree.';
     }
-    if (active_editor_file) notes += ` Active editor file: ${active_editor_file.relativePath} (${active_editor_file.source}, ${active_editor_file.confidence} confidence).`;
+    if (active_editor_file) {
+      const { relativePath, source, confidence } = active_editor_file;
+      notes += ` Active editor file: ${relativePath} (${source}, ${confidence} confidence).`;
+    }
 
     const result = {
       preview_kind,

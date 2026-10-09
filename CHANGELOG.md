@@ -6,6 +6,74 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-09
+
+This is a maintenance release that restructures the codebase without changing
+features. Settings, sessions, checkpoints, snapshots, and permissions carry
+over unchanged; nothing is migrated and no endpoint needs to be re-confirmed.
+Contributors need Node.js 24.15 or newer.
+
+### Added
+
+- Side-panel DOM tests under jsdom (`test/*.dom.test.mjs`): hostile Markdown
+  sanitization, transcript rendering, inert streaming segments, tool blocks,
+  preflight and approval banners, the Revert confirmation flow, and the
+  snapshot menu with its restore and delete dialogs.
+- Unit tests for the Send flow, the quick-attach queue, transcript
+  reconciliation, and the generated bridge block.
+- `npm run check:lines` enforces a 160-character line limit for source and
+  scripts; `verify` runs it together with `check:bridge`.
+- Coverage floors now cover every agent, storage, transport, and side-panel
+  renderer module.
+- `docs/user-guide.md` holds the detailed feature reference; the README is a
+  shorter overview.
+
+### Changed
+
+- **Node.js 24.15 or newer is required to build and test from source.** The
+  previous floor was Node.js 22.13. CI now tests Node.js 24.15 and the latest
+  Node.js 24 LTS. The installed extension is unaffected.
+- **Structural rework.** The service worker's storage and agent modules are
+  split into focused stores (`src/background/storage/`) and run modules
+  (`src/background/agent/`) behind unchanged `storage.js` and `agent.js`
+  facades. The side panel's send flow, transcript renderer (markdown,
+  streaming, tool blocks, revert controls), session menu, quick-attach queue,
+  About dialog, and settings tabs are separate modules; `app.js` only wires
+  them together. Storage keys, retention limits, message protocol, and
+  import/export formats are unchanged.
+- **One copy of shared page logic.** The content-script bridge now embeds a
+  generated copy of the dependency-free shared modules (`page-limits.js`,
+  `active-file.js`), so path normalization, focused-file labels, and page
+  bounds are no longer hand-copied into `main.js` and `workspace.js`. The
+  copies had already drifted (one did not trim path segments). The protocol
+  validators consume the same limits. `npm run check:bridge` fails when the
+  generated block is stale; `npm run sync:bridge` regenerates it.
+- **Exact transcript reconciliation.** Assistant turns persisted by the worker
+  and the panel now carry the originating run id, and the worker reconciles by
+  that id instead of comparing content. Older records still match by content.
+- **Shared structured errors.** Every context creates errors through
+  `codedError()` in `src/shared/errors.js` instead of eight local copies.
+- Diagnostic severity patterns, tool descriptions, and prompt fragments are
+  assembled from shorter constants; behavior is unchanged and a test proves the
+  severity pattern is identical.
+- The side panel's SVG icons are produced by one helper instead of repeated
+  markup strings.
+- Static tests check workflow pins, permissions, and document structure rather
+  than exact prose and source literals.
+- `jsdom` is a pinned development dependency for the DOM tests; it is not
+  shipped.
+
+### Fixed
+
+- The release dependency audit (`npm run audit:release`) failed on a
+  high-severity advisory in a transitive development dependency
+  (`brace-expansion`, reached through ESLint). The lockfile now resolves a
+  patched version.
+- The worker-side `read_document` handler kept a fallback for a page field the
+  bridge validator never allows. The dead path is removed and the integration
+  test now emulates the real page contract (numbered range, bounds, truncation
+  hint).
+
 ## [1.1.0] - 2026-08-16
 
 This is a substantial safety, recovery, multi-file, storage, and release-
@@ -271,7 +339,8 @@ definitions are also revalidated against the stricter contracts below.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/dbccccccc/Typst-Side-Agent/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/dbccccccc/Typst-Side-Agent/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/dbccccccc/Typst-Side-Agent/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dbccccccc/Typst-Side-Agent/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/dbccccccc/Typst-Side-Agent/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/dbccccccc/Typst-Side-Agent/releases/tag/v1.0.0

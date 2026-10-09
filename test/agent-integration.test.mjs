@@ -580,7 +580,6 @@ test('editor mutation waits for exact-run approval and targets the captured tab'
       if (message.type === PROTOCOL.PAGE_GET_CONTEXT) {
         return successResponse(message.requestId, {
           fullText: '= Old',
-          numberedFullText: '1|= Old',
           cursorPos: 0,
           selectionFrom: 0,
           selectionTo: 0,
@@ -947,21 +946,48 @@ test('originating tab is revalidated and errors without contacting provider afte
 
 test('read_document paging and truncation run through the agent dispatch boundary', async () => {
   const events = [];
-  const numberedFullText = Array.from({ length: 120 }, (_, index) => `${index + 1}|${'x'.repeat(80)}`).join('\n');
+  const lines = Array.from({ length: 120 }, () => 'x'.repeat(80));
+  const fullText = lines.join('\n');
+  const pageRequests = [];
   let providerRound = 0;
+  // Emulate the page adapter: number exactly the requested range and stop at maxChars.
+  function numberedRange({ startLine = 1, endLine = lines.length, maxChars = 28_000 }) {
+    const out = [];
+    let chars = 0;
+    let lastLine = startLine - 1;
+    let truncated = false;
+    for (let number = startLine; number <= Math.min(endLine, lines.length); number++) {
+      const line = `${String(number).padStart(3, ' ')}|${lines[number - 1]}`;
+      const separator = out.length ? 1 : 0;
+      if (chars + separator + line.length > maxChars) { truncated = true; break; }
+      out.push(line);
+      chars += separator + line.length;
+      lastLine = number;
+    }
+    return {
+      numberedDocument: out.join('\n'),
+      startLine,
+      endLine: Math.max(startLine, lastLine),
+      truncated,
+      ...(truncated ? { nextStartLine: lastLine + 1 } : {})
+    };
+  }
   configureAgentAdapters({
     runtimeSend: message => events.push(message),
     tabsGet: async tabId => ({ id: tabId, url: 'https://typst.app/project/project-a' }),
     tabsSend: async (_tabId, message) => {
       if (message.type === PROTOCOL.PAGE_GET_PROBE) return successResponse(message.requestId, { editor: true }, message.runId);
-      if (message.type === PROTOCOL.PAGE_GET_CONTEXT) return successResponse(message.requestId, {
-        fullText: numberedFullText.replace(/^\s*\d+\|/gm, ''),
-        numberedFullText,
-        docLength: numberedFullText.length,
-        cursorLine: 1,
-        cursorColumn: 1,
-        workspace: null
-      }, message.runId);
+      if (message.type === PROTOCOL.PAGE_GET_CONTEXT) {
+        pageRequests.push(message.payload);
+        return successResponse(message.requestId, {
+          ...numberedRange(message.payload),
+          docLength: fullText.length,
+          lineCount: lines.length,
+          cursorLine: 1,
+          cursorColumn: 1,
+          workspace: null
+        }, message.runId);
+      }
       throw new Error(`Unexpected page request ${message.type}`);
     },
     loadCustomTools: async () => [],
@@ -977,10 +1003,15 @@ test('read_document paging and truncation run through the agent dispatch boundar
   });
   assert.equal((await handleStreamStart(startMessage('run-read'))).ok, true);
   const result = events.find(event => event.type === PROTOCOL.AI_TOOL_RESULT).payload.result;
+  const readRequest = pageRequests.find(payload => payload.projection === 'numbered' && payload.startLine === 10);
+  assert.deepEqual(readRequest, { projection: 'numbered', startLine: 10, maxChars: 4000 });
   assert.equal(result.ok, true);
   assert.equal(result.start_line, 10);
+  assert.equal(result.approx_line_count, 120);
   assert.equal(result.truncated, true);
+  assert.ok(result.end_line > 10 && result.end_line < 120);
   assert.ok(result.numbered_document.length <= 4100);
+  assert.match(result.numbered_document, new RegExp(`continue with start_line=${result.end_line + 1}\\)$`));
 });
 
 test('reads and edits pause until the user returns to the file open when the message was sent', async () => {

@@ -2,8 +2,10 @@
  * Internal extension protocol. Every cross-context message uses the envelope
  * `{ type, requestId?, runId?, payload }` and is validated at the boundary.
  * Keep this module pure so it can be imported by Node tests, the service
- * worker, and the side panel.
+ * worker, and the side panel; its only import is the dependency-free page
+ * bounds module shared with the content-script bridge.
  */
+import { PAGE_LIMITS as L } from './page-limits.js';
 
 export const PROTOCOL = Object.freeze({
   RESPONSE: 'PROTOCOL_RESPONSE',
@@ -157,6 +159,16 @@ export const MESSAGE_REGISTRY = Object.freeze(
 );
 
 const TYPE_SET = new Set(Object.values(PROTOCOL));
+const SETTINGS_FIELDS = new Set([
+  'systemPrompt', 'models', 'activeModelId', 'maxHistoryMessages', 'autoNameModelId', 'editorApprovalMode', 'sendMessageShortcut'
+]);
+const APPROVAL_FIELDS = [
+  'callId', 'name', 'identity', 'effect', 'destination', 'arguments', 'argumentChars', 'argumentsTruncated', 'preview', 'previewNotice'
+];
+const APPROVAL_REQUIRED_FIELDS = APPROVAL_FIELDS.slice(0, 8);
+const APPROVAL_TEXT_FIELDS = APPROVAL_FIELDS.slice(0, 6);
+const PREPARED_EDIT_FIELDS = ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId'];
+const PUBLIC_SNAPSHOT_FIELDS = new Set(['id', 'kind', 'projectId', 'fileLabel', 'title', 'createdAt', 'textLength', 'sessionId']);
 
 export function createRequestId(prefix = 'req') {
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -252,7 +264,9 @@ export function validateMessagePayload(type, payload) {
       if (!checked.ok) return checked;
       if (typeof payload.ok !== 'boolean') return invalid('INVALID_RESPONSE', 'Response ok must be a boolean', '$.payload.ok');
       if (payload.ok) {
-        if (!Object.hasOwn(payload, 'data') || Object.hasOwn(payload, 'error')) return invalid('INVALID_RESPONSE', 'Successful response must contain data only', '$.payload');
+        if (!Object.hasOwn(payload, 'data') || Object.hasOwn(payload, 'error')) {
+          return invalid('INVALID_RESPONSE', 'Successful response must contain data only', '$.payload');
+        }
       } else if (!isRecord(payload.error) || !nonEmpty(payload.error.code) || !nonEmpty(payload.error.message)) {
         return invalid('INVALID_RESPONSE', 'Failed response must contain a structured error', '$.payload.error');
       }
@@ -276,7 +290,9 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.AI_STREAM_DONE:
       checked = exactFields(payload, ['snapshot', 'snapshotWarning']);
       if (!checked.ok) return checked;
-      if (payload.snapshot != null && !validPublicDocumentSnapshot(payload.snapshot)) return invalid('INVALID_DOCUMENT_SNAPSHOT', 'Completed-run snapshot metadata is invalid.', '$.payload.snapshot');
+      if (payload.snapshot != null && !validPublicDocumentSnapshot(payload.snapshot)) {
+        return invalid('INVALID_DOCUMENT_SNAPSHOT', 'Completed-run snapshot metadata is invalid.', '$.payload.snapshot');
+      }
       return payload.snapshotWarning == null || (typeof payload.snapshotWarning === 'string' && payload.snapshotWarning.length <= 500)
         ? checked
         : invalid('INVALID_DOCUMENT_SNAPSHOT_WARNING', 'Completed-run snapshot warning is invalid.', '$.payload.snapshotWarning');
@@ -286,7 +302,7 @@ export function validateMessagePayload(type, payload) {
       if (Object.keys(payload).length === 0) return exactFields(payload, []);
       checked = exactFields(payload, ['tabId', 'windowId', 'eventId'], ['tabId', 'windowId']);
       if (!checked.ok) return checked;
-      return Number.isInteger(payload.tabId) && payload.tabId >= 0 && Number.isInteger(payload.windowId) && payload.windowId >= 0 && (payload.eventId == null || nonEmpty(payload.eventId))
+      return validTabId(payload.tabId) && validTabId(payload.windowId) && (payload.eventId == null || nonEmpty(payload.eventId))
         ? checked
         : invalid('INVALID_QUICK_ATTACH_SOURCE', 'Quick attachment requires non-negative tabId and windowId values.', '$.payload');
     case PROTOCOL.QUICK_ATTACH_DRAIN:
@@ -300,8 +316,12 @@ export function validateMessagePayload(type, payload) {
       checked = exactFields(payload, ['settings', 'fields', 'modelMutation'], ['settings']);
       if (!checked.ok) return checked;
       if (!isRecord(payload.settings)) return invalid('INVALID_SETTINGS', 'settings must be an object', '$.payload.settings');
-      if (payload.fields != null && (!Array.isArray(payload.fields) || payload.fields.some(field => !['systemPrompt', 'models', 'activeModelId', 'maxHistoryMessages', 'autoNameModelId', 'editorApprovalMode', 'sendMessageShortcut'].includes(field)))) return invalid('INVALID_SETTINGS_FIELDS', 'settings fields are invalid', '$.payload.fields');
-      if (payload.modelMutation != null && !validRegistryMutation(payload.modelMutation, { allowSelect: true })) return invalid('INVALID_MODEL_MUTATION', 'model mutation is invalid', '$.payload.modelMutation');
+      if (payload.fields != null && (!Array.isArray(payload.fields) || payload.fields.some(field => !SETTINGS_FIELDS.has(field)))) {
+        return invalid('INVALID_SETTINGS_FIELDS', 'settings fields are invalid', '$.payload.fields');
+      }
+      if (payload.modelMutation != null && !validRegistryMutation(payload.modelMutation, { allowSelect: true })) {
+        return invalid('INVALID_MODEL_MUTATION', 'model mutation is invalid', '$.payload.modelMutation');
+      }
       return checked;
     case PROTOCOL.SAVE_THEME:
       checked = exactFields(payload, ['theme'], ['theme']);
@@ -316,7 +336,9 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.SESSION_CREATE:
       checked = exactFields(payload, ['projectId', 'name'], ['projectId']);
       if (!checked.ok) return checked;
-      if (typeof payload.projectId !== 'string' || (payload.name != null && typeof payload.name !== 'string')) return invalid('INVALID_SESSION_CREATE', 'Session projectId and name must be strings', '$.payload');
+      if (typeof payload.projectId !== 'string' || (payload.name != null && typeof payload.name !== 'string')) {
+        return invalid('INVALID_SESSION_CREATE', 'Session projectId and name must be strings', '$.payload');
+      }
       return checked;
     case PROTOCOL.SESSION_GET:
     case PROTOCOL.SESSION_DELETE:
@@ -326,43 +348,61 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.SESSION_UPDATE:
       checked = exactFields(payload, ['sessionId', 'name', 'messages', 'userRenamed', 'autoName'], ['sessionId']);
       if (!checked.ok) return checked;
-      if (!nonEmpty(payload.sessionId) || (payload.name != null && typeof payload.name !== 'string') || (payload.messages != null && !Array.isArray(payload.messages)) || (payload.userRenamed != null && typeof payload.userRenamed !== 'boolean') || (payload.autoName != null && typeof payload.autoName !== 'boolean')) {
+      if (!validSessionUpdatePayload(payload)) {
         return invalid('INVALID_SESSION_UPDATE', 'Session update fields have invalid types', '$.payload');
       }
-      if (payload.autoName === true && (typeof payload.name !== 'string' || payload.messages != null || payload.userRenamed != null)) return invalid('INVALID_SESSION_UPDATE', 'Automatic naming must update only the session name.', '$.payload');
+      if (payload.autoName === true && (typeof payload.name !== 'string' || payload.messages != null || payload.userRenamed != null)) {
+        return invalid('INVALID_SESSION_UPDATE', 'Automatic naming must update only the session name.', '$.payload');
+      }
       return checked;
     case PROTOCOL.SESSION_IMPORT:
       checked = exactFields(payload, ['exportData', 'records']);
       if (!checked.ok) return checked;
-      if (!Object.hasOwn(payload, 'exportData') && !Object.hasOwn(payload, 'records')) return invalid('MISSING_PAYLOAD_FIELD', 'Session import requires exportData or records', '$.payload');
-      if (!isContainer(payload.exportData ?? payload.records)) return invalid('INVALID_SESSION_IMPORT', 'Session import data must be an object or array', '$.payload');
+      if (!Object.hasOwn(payload, 'exportData') && !Object.hasOwn(payload, 'records')) {
+        return invalid('MISSING_PAYLOAD_FIELD', 'Session import requires exportData or records', '$.payload');
+      }
+      if (!isContainer(payload.exportData ?? payload.records)) {
+        return invalid('INVALID_SESSION_IMPORT', 'Session import data must be an object or array', '$.payload');
+      }
       return checked;
     case PROTOCOL.EDIT_CHECKPOINT_REVERT:
       checked = exactFields(payload, ['checkpointId', 'tabId', 'projectId', 'sessionId'], ['checkpointId', 'tabId', 'projectId', 'sessionId']);
       if (!checked.ok) return checked;
-      if (!nonEmpty(payload.checkpointId) || payload.checkpointId.length > 128) return invalid('INVALID_CHECKPOINT_ID', 'checkpointId is required', '$.payload.checkpointId');
+      if (!nonEmpty(payload.checkpointId) || payload.checkpointId.length > 128) {
+        return invalid('INVALID_CHECKPOINT_ID', 'checkpointId is required', '$.payload.checkpointId');
+      }
       if (!Number.isInteger(payload.tabId) || payload.tabId < 0) return invalid('INVALID_TAB_ID', 'tabId must be a non-negative integer', '$.payload.tabId');
       if (!nonEmpty(payload.projectId)) return invalid('INVALID_PROJECT_ID', 'projectId is required', '$.payload.projectId');
       return nonEmpty(payload.sessionId) ? checked : invalid('INVALID_SESSION_ID', 'sessionId is required', '$.payload.sessionId');
     case PROTOCOL.DOCUMENT_SNAPSHOT_LIST:
       checked = exactFields(payload, ['tabId', 'projectId', 'sessionId'], ['tabId', 'projectId', 'sessionId']);
       if (!checked.ok) return checked;
-      return validDocumentSnapshotScope(payload) ? checked : invalid('INVALID_DOCUMENT_SNAPSHOT_SCOPE', 'Document snapshot requests require an exact tab, project, and chat scope.', '$.payload');
+      return validDocumentSnapshotScope(payload)
+        ? checked
+        : invalid('INVALID_DOCUMENT_SNAPSHOT_SCOPE', 'Document snapshot requests require an exact tab, project, and chat scope.', '$.payload');
     case PROTOCOL.DOCUMENT_SNAPSHOT_PREVIEW:
     case PROTOCOL.DOCUMENT_SNAPSHOT_RESTORE:
     case PROTOCOL.DOCUMENT_SNAPSHOT_DELETE:
       checked = exactFields(payload, ['snapshotId', 'tabId', 'projectId', 'sessionId'], ['snapshotId', 'tabId', 'projectId', 'sessionId']);
       if (!checked.ok) return checked;
-      if (!nonEmpty(payload.snapshotId) || payload.snapshotId.length > 128) return invalid('INVALID_DOCUMENT_SNAPSHOT_ID', 'snapshotId is required', '$.payload.snapshotId');
-      return validDocumentSnapshotScope(payload) ? checked : invalid('INVALID_DOCUMENT_SNAPSHOT_SCOPE', 'Document snapshot requests require an exact tab, project, and chat scope.', '$.payload');
+      if (!nonEmpty(payload.snapshotId) || payload.snapshotId.length > 128) {
+        return invalid('INVALID_DOCUMENT_SNAPSHOT_ID', 'snapshotId is required', '$.payload.snapshotId');
+      }
+      return validDocumentSnapshotScope(payload)
+        ? checked
+        : invalid('INVALID_DOCUMENT_SNAPSHOT_SCOPE', 'Document snapshot requests require an exact tab, project, and chat scope.', '$.payload');
     case PROTOCOL.SAVE_CUSTOM_TOOLS:
       checked = exactFields(payload, ['tools', 'mutation'], ['tools']);
       if (!checked.ok) return checked;
-      return Array.isArray(payload.tools) && (payload.mutation == null || validRegistryMutation(payload.mutation)) ? checked : invalid('INVALID_CUSTOM_TOOLS', 'tools or mutation is invalid', '$.payload');
+      return Array.isArray(payload.tools) && (payload.mutation == null || validRegistryMutation(payload.mutation))
+        ? checked
+        : invalid('INVALID_CUSTOM_TOOLS', 'tools or mutation is invalid', '$.payload');
     case PROTOCOL.SAVE_MCP_SERVERS:
       checked = exactFields(payload, ['servers', 'mutation'], ['servers']);
       if (!checked.ok) return checked;
-      return Array.isArray(payload.servers) && (payload.mutation == null || validRegistryMutation(payload.mutation)) ? checked : invalid('INVALID_MCP_SERVERS', 'servers or mutation is invalid', '$.payload');
+      return Array.isArray(payload.servers) && (payload.mutation == null || validRegistryMutation(payload.mutation))
+        ? checked
+        : invalid('INVALID_MCP_SERVERS', 'servers or mutation is invalid', '$.payload');
     case PROTOCOL.PROBE_MCP_SERVER:
       checked = exactFields(payload, ['server'], ['server']);
       if (!checked.ok) return checked;
@@ -373,11 +413,21 @@ export function validateMessagePayload(type, payload) {
       checked = exactFields(payload, ['tabId', 'projection', 'startLine', 'endLine', 'maxChars']);
       if (!checked.ok) return checked;
       if (!validOptionalTabId(payload.tabId)) return invalid('INVALID_TAB_ID', 'tabId must be a non-negative integer', '$.payload.tabId');
-      if (payload.projection != null && !['full', 'edit', 'numbered', 'identity'].includes(payload.projection)) return invalid('INVALID_CONTEXT_PROJECTION', 'Context projection is invalid', '$.payload.projection');
-      if (payload.startLine != null && (!Number.isInteger(payload.startLine) || payload.startLine < 1)) return invalid('INVALID_CONTEXT_RANGE', 'startLine must be a positive integer', '$.payload.startLine');
-      if (payload.endLine != null && (!Number.isInteger(payload.endLine) || payload.endLine < 1)) return invalid('INVALID_CONTEXT_RANGE', 'endLine must be a positive integer', '$.payload.endLine');
-      if (payload.startLine != null && payload.endLine != null && payload.endLine < payload.startLine) return invalid('INVALID_CONTEXT_RANGE', 'endLine must not precede startLine', '$.payload.endLine');
-      if (payload.maxChars != null && (!Number.isInteger(payload.maxChars) || payload.maxChars < 1 || payload.maxChars > 64_000)) return invalid('INVALID_CONTEXT_LIMIT', 'maxChars must be an integer from 1 to 64000', '$.payload.maxChars');
+      if (payload.projection != null && !['full', 'edit', 'numbered', 'identity'].includes(payload.projection)) {
+        return invalid('INVALID_CONTEXT_PROJECTION', 'Context projection is invalid', '$.payload.projection');
+      }
+      if (payload.startLine != null && (!Number.isInteger(payload.startLine) || payload.startLine < 1)) {
+        return invalid('INVALID_CONTEXT_RANGE', 'startLine must be a positive integer', '$.payload.startLine');
+      }
+      if (payload.endLine != null && (!Number.isInteger(payload.endLine) || payload.endLine < 1)) {
+        return invalid('INVALID_CONTEXT_RANGE', 'endLine must be a positive integer', '$.payload.endLine');
+      }
+      if (payload.startLine != null && payload.endLine != null && payload.endLine < payload.startLine) {
+        return invalid('INVALID_CONTEXT_RANGE', 'endLine must not precede startLine', '$.payload.endLine');
+      }
+      if (payload.maxChars != null && (!Number.isInteger(payload.maxChars) || payload.maxChars < 1 || payload.maxChars > L.MAX_CONTEXT_REQUEST_CHARS)) {
+        return invalid('INVALID_CONTEXT_LIMIT', `maxChars must be an integer from 1 to ${L.MAX_CONTEXT_REQUEST_CHARS}`, '$.payload.maxChars');
+      }
       return checked;
     case PROTOCOL.GET_DIAGNOSTICS:
     case PROTOCOL.PAGE_GET_DIAGNOSTICS:
@@ -388,22 +438,34 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.PAGE_GET_PREVIEW:
       checked = exactFields(payload, ['tabId', 'preferTypstCanvas', 'preferAssetImage']);
       if (!checked.ok) return checked;
-      if (!validOptionalTabId(payload.tabId) || !validOptionalBoolean(payload.preferTypstCanvas) || !validOptionalBoolean(payload.preferAssetImage)) return invalid('INVALID_PREVIEW_REQUEST', 'Preview options have invalid types', '$.payload');
+      if (!validOptionalTabId(payload.tabId) || !validOptionalBoolean(payload.preferTypstCanvas) || !validOptionalBoolean(payload.preferAssetImage)) {
+        return invalid('INVALID_PREVIEW_REQUEST', 'Preview options have invalid types', '$.payload');
+      }
       return checked;
     case PROTOCOL.GENERATE_SESSION_TITLE:
       checked = exactFields(payload, ['modelConfig', 'messages'], ['modelConfig', 'messages']);
       if (!checked.ok) return checked;
-      return isRecord(payload.modelConfig) && Array.isArray(payload.messages) ? checked : invalid('INVALID_TITLE_REQUEST', 'Title request requires modelConfig and messages', '$.payload');
+      return isRecord(payload.modelConfig) && Array.isArray(payload.messages)
+        ? checked
+        : invalid('INVALID_TITLE_REQUEST', 'Title request requires modelConfig and messages', '$.payload');
 
     case PROTOCOL.AI_STREAM_START:
-      checked = exactFields(payload, ['tabId', 'projectId', 'sessionId', 'messages', 'settings', 'modelConfig', 'attachments', 'activeEditorFile'], ['tabId', 'projectId', 'sessionId', 'messages']);
+      checked = exactFields(
+        payload,
+        ['tabId', 'projectId', 'sessionId', 'messages', 'settings', 'modelConfig', 'attachments', 'activeEditorFile'],
+        ['tabId', 'projectId', 'sessionId', 'messages']
+      );
       if (!checked.ok) return checked;
       if (!Number.isInteger(payload.tabId) || payload.tabId < 0) return invalid('INVALID_TAB_ID', 'tabId must be a non-negative integer', '$.payload.tabId');
       if (!nonEmpty(payload.projectId)) return invalid('INVALID_PROJECT_ID', 'projectId is required', '$.payload.projectId');
       if (!nonEmpty(payload.sessionId)) return invalid('INVALID_SESSION_ID', 'sessionId is required', '$.payload.sessionId');
       if (!Array.isArray(payload.messages)) return invalid('INVALID_MESSAGES', 'messages must be an array', '$.payload.messages');
-      if ((payload.settings != null && !isRecord(payload.settings)) || (payload.modelConfig != null && !isRecord(payload.modelConfig)) || (payload.attachments != null && !isRecord(payload.attachments))) return invalid('INVALID_RUN_START', 'Run settings, modelConfig, and attachments must be objects', '$.payload');
-      if (payload.activeEditorFile != null && !validActiveEditorFile(payload.activeEditorFile)) return invalid('INVALID_ACTIVE_EDITOR_FILE', 'activeEditorFile is invalid', '$.payload.activeEditorFile');
+      if (!validRunStartOptions(payload)) {
+        return invalid('INVALID_RUN_START', 'Run settings, modelConfig, and attachments must be objects', '$.payload');
+      }
+      if (payload.activeEditorFile != null && !validActiveEditorFile(payload.activeEditorFile)) {
+        return invalid('INVALID_ACTIVE_EDITOR_FILE', 'activeEditorFile is invalid', '$.payload.activeEditorFile');
+      }
       return checked;
     case PROTOCOL.AI_RUN_RESERVE:
       checked = exactFields(payload, ['tabId', 'projectId', 'sessionId'], ['tabId', 'projectId', 'sessionId']);
@@ -420,26 +482,37 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.AI_STREAM_BATCH:
       checked = exactFields(payload, ['items'], ['items']);
       if (!checked.ok) return checked;
-      if (!Array.isArray(payload.items) || payload.items.length > 256 || payload.items.some(item => !isRecord(item) || !['content', 'reasoning'].includes(item.channel) || typeof item.text !== 'string')) return invalid('INVALID_STREAM_BATCH', 'Stream batch items are invalid', '$.payload.items');
+      if (!validStreamBatchItems(payload.items)) {
+        return invalid('INVALID_STREAM_BATCH', 'Stream batch items are invalid', '$.payload.items');
+      }
       return checked;
     case PROTOCOL.AI_STREAM_CANCELLED:
     case PROTOCOL.AI_STREAM_ERROR:
       checked = exactFields(payload, ['code', 'message'], ['code', 'message']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.code) && typeof payload.message === 'string' ? checked : invalid('INVALID_RUN_ERROR', 'Run terminal error requires code and message', '$.payload');
+      return nonEmpty(payload.code) && typeof payload.message === 'string'
+        ? checked
+        : invalid('INVALID_RUN_ERROR', 'Run terminal error requires code and message', '$.payload');
     case PROTOCOL.AI_TOOL_CALLS:
       checked = exactFields(payload, ['calls'], ['calls']);
       if (!checked.ok) return checked;
-      if (!Array.isArray(payload.calls) || payload.calls.length > 64 || payload.calls.some(call => !isRecord(call) || !nonEmpty(call.id) || !nonEmpty(call.name) || !isRecord(call.args))) return invalid('INVALID_TOOL_CALLS', 'Tool calls are invalid', '$.payload.calls');
+      if (!validToolCallList(payload.calls)) {
+        return invalid('INVALID_TOOL_CALLS', 'Tool calls are invalid', '$.payload.calls');
+      }
       return checked;
     case PROTOCOL.AI_TOOL_RESULT:
       checked = exactFields(payload, ['callId', 'name', 'result'], ['callId', 'name', 'result']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.callId) && nonEmpty(payload.name) && isRecord(payload.result) ? checked : invalid('INVALID_TOOL_RESULT', 'Tool result fields are invalid', '$.payload');
+      return nonEmpty(payload.callId) && nonEmpty(payload.name) && isRecord(payload.result)
+        ? checked
+        : invalid('INVALID_TOOL_RESULT', 'Tool result fields are invalid', '$.payload');
     case PROTOCOL.AI_TOOL_PREFLIGHT_WAITING:
       checked = exactFields(payload, ['callId', 'name', 'missing', 'hint'], ['callId', 'name', 'missing', 'hint']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.callId) && nonEmpty(payload.name) && Array.isArray(payload.missing) && payload.missing.every(nonEmpty) && typeof payload.hint === 'string' ? checked : invalid('INVALID_PREFLIGHT', 'Preflight payload is invalid', '$.payload');
+      return nonEmpty(payload.callId) && nonEmpty(payload.name)
+        && Array.isArray(payload.missing) && payload.missing.every(nonEmpty) && typeof payload.hint === 'string'
+        ? checked
+        : invalid('INVALID_PREFLIGHT', 'Preflight payload is invalid', '$.payload');
     case PROTOCOL.AI_TOOL_PREFLIGHT_READY:
       checked = exactFields(payload, ['callId'], ['callId']);
       if (!checked.ok) return checked;
@@ -447,32 +520,46 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.AI_TOOL_PREFLIGHT_RESOLVE:
       checked = exactFields(payload, ['callId', 'action'], ['callId', 'action']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.callId) && ['retry', 'cancel'].includes(payload.action) ? checked : invalid('INVALID_PREFLIGHT_ACTION', 'Preflight action is invalid', '$.payload.action');
+      return nonEmpty(payload.callId) && ['retry', 'cancel'].includes(payload.action)
+        ? checked
+        : invalid('INVALID_PREFLIGHT_ACTION', 'Preflight action is invalid', '$.payload.action');
     case PROTOCOL.AI_TOOL_APPROVAL_REQUIRED:
-      checked = exactFields(payload, ['callId', 'name', 'identity', 'effect', 'destination', 'arguments', 'argumentChars', 'argumentsTruncated', 'preview', 'previewNotice'], ['callId', 'name', 'identity', 'effect', 'destination', 'arguments', 'argumentChars', 'argumentsTruncated']);
+      checked = exactFields(payload, APPROVAL_FIELDS, APPROVAL_REQUIRED_FIELDS);
       if (!checked.ok) return checked;
-      if (!['callId', 'name', 'identity', 'effect', 'destination', 'arguments'].every(field => typeof payload[field] === 'string' && payload[field].length > 0)) return invalid('INVALID_APPROVAL', 'Approval payload is invalid', '$.payload');
-      if (!Number.isInteger(payload.argumentChars) || payload.argumentChars < payload.arguments.length || typeof payload.argumentsTruncated !== 'boolean' || payload.argumentsTruncated !== (payload.argumentChars > payload.arguments.length)) return invalid('INVALID_APPROVAL', 'Approval argument summary metadata is invalid', '$.payload');
-      if (payload.previewNotice != null && (typeof payload.previewNotice !== 'string' || payload.previewNotice.length > 500)) return invalid('INVALID_APPROVAL', 'Approval preview notice is invalid', '$.payload.previewNotice');
-      return payload.preview == null || validDiffPreview(payload.preview) ? checked : invalid('INVALID_EDIT_PREVIEW', 'Edit preview is invalid', '$.payload.preview');
+      if (!APPROVAL_TEXT_FIELDS.every(field => typeof payload[field] === 'string' && payload[field].length > 0)) {
+        return invalid('INVALID_APPROVAL', 'Approval payload is invalid', '$.payload');
+      }
+      if (!validArgumentSummary(payload)) {
+        return invalid('INVALID_APPROVAL', 'Approval argument summary metadata is invalid', '$.payload');
+      }
+      if (payload.previewNotice != null && (typeof payload.previewNotice !== 'string' || payload.previewNotice.length > 500)) {
+        return invalid('INVALID_APPROVAL', 'Approval preview notice is invalid', '$.payload.previewNotice');
+      }
+      return payload.preview == null || validDiffPreview(payload.preview)
+        ? checked
+        : invalid('INVALID_EDIT_PREVIEW', 'Edit preview is invalid', '$.payload.preview');
     case PROTOCOL.AI_TOOL_APPROVAL_RESOLVE:
       checked = exactFields(payload, ['callId', 'action'], ['callId', 'action']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.callId) && ['approve_once', 'allow_run', 'deny'].includes(payload.action) ? checked : invalid('INVALID_APPROVAL_ACTION', 'Approval action is invalid', '$.payload.action');
+      return nonEmpty(payload.callId) && ['approve_once', 'allow_run', 'deny'].includes(payload.action)
+        ? checked
+        : invalid('INVALID_APPROVAL_ACTION', 'Approval action is invalid', '$.payload.action');
     case PROTOCOL.ACTIVE_TAB_CHANGED:
       checked = exactFields(payload, ['onTypst', 'url', 'tabId'], ['onTypst', 'url', 'tabId']);
       if (!checked.ok) return checked;
-      return typeof payload.onTypst === 'boolean' && typeof payload.url === 'string' && (payload.tabId == null || (Number.isInteger(payload.tabId) && payload.tabId >= 0)) ? checked : invalid('INVALID_TAB_EVENT', 'Active-tab event is invalid', '$.payload');
+      return typeof payload.onTypst === 'boolean' && typeof payload.url === 'string' && validOptionalTabId(payload.tabId)
+        ? checked
+        : invalid('INVALID_TAB_EVENT', 'Active-tab event is invalid', '$.payload');
     case PROTOCOL.PAGE_SHOW_EDIT_PREVIEW:
-      checked = exactFields(payload, ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'preview'], ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'preview']);
+      checked = exactFields(payload, [...PREPARED_EDIT_FIELDS, 'preview'], [...PREPARED_EDIT_FIELDS, 'preview']);
       if (!checked.ok) return checked;
-      return typeof payload.expectedText === 'string' && payload.expectedText.length <= 1_000_000 && nonEmpty(payload.expectedEditorToken) && payload.expectedEditorToken.length <= 200 && nonEmpty(payload.expectedFileLabel) && payload.expectedFileLabel.length <= 240 && validPreparedChanges(payload.changes, payload.expectedText.length) && nonEmpty(payload.callId) && validDiffPreview(payload.preview)
+      return validPreparedEditFields(payload) && validDiffPreview(payload.preview)
         ? checked
         : invalid('INVALID_PREPARED_EDIT', 'Prepared edit preview request is invalid', '$.payload');
     case PROTOCOL.PAGE_APPLY_EDIT:
-      checked = exactFields(payload, ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'reviewedDiff'], ['expectedText', 'expectedEditorToken', 'expectedFileLabel', 'changes', 'callId', 'reviewedDiff']);
+      checked = exactFields(payload, [...PREPARED_EDIT_FIELDS, 'reviewedDiff'], [...PREPARED_EDIT_FIELDS, 'reviewedDiff']);
       if (!checked.ok) return checked;
-      return typeof payload.expectedText === 'string' && payload.expectedText.length <= 1_000_000 && nonEmpty(payload.expectedEditorToken) && payload.expectedEditorToken.length <= 200 && nonEmpty(payload.expectedFileLabel) && payload.expectedFileLabel.length <= 240 && validPreparedChanges(payload.changes, payload.expectedText.length) && nonEmpty(payload.callId) && typeof payload.reviewedDiff === 'boolean'
+      return validPreparedEditFields(payload) && typeof payload.reviewedDiff === 'boolean'
         ? checked
         : invalid('INVALID_PREPARED_EDIT', 'Prepared edit request is invalid', '$.payload');
     case PROTOCOL.PAGE_CLEAR_EDIT_PREVIEW:
@@ -482,7 +569,7 @@ export function validateMessagePayload(type, payload) {
     case PROTOCOL.PAGE_CANCEL_REQUEST:
       checked = exactFields(payload, ['targetRequestId'], ['targetRequestId']);
       if (!checked.ok) return checked;
-      return nonEmpty(payload.targetRequestId) && payload.targetRequestId.length <= 200
+      return nonEmpty(payload.targetRequestId) && payload.targetRequestId.length <= L.MAX_REQUEST_ID_CHARS
         ? checked
         : invalid('INVALID_CANCEL_TARGET', 'targetRequestId is required', '$.payload.targetRequestId');
     default:
@@ -542,8 +629,12 @@ function isContainer(value) {
   return Array.isArray(value) || isRecord(value);
 }
 
+function validTabId(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
 function validOptionalTabId(value) {
-  return value == null || (Number.isInteger(value) && value >= 0);
+  return value == null || validTabId(value);
 }
 
 function validOptionalBoolean(value) {
@@ -556,7 +647,8 @@ function validActiveEditorFile(value) {
   if (Object.keys(value).some(key => !allowed.has(key))) return false;
   if (value.projectLabel != null && (typeof value.projectLabel !== 'string' || value.projectLabel.length > 160)) return false;
   if (!nonEmpty(value.relativePath) || value.relativePath.length > 240 || /[\0\r\n\\]/.test(value.relativePath)) return false;
-  if (value.relativePath !== value.relativePath.trim() || value.relativePath.startsWith('/') || value.relativePath.includes('//') || /^[a-z][a-z0-9+.-]*:/i.test(value.relativePath)) return false;
+  const path = value.relativePath;
+  if (path !== path.trim() || path.startsWith('/') || path.includes('//') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return false;
   const segments = value.relativePath.split('/');
   if (segments.some(segment => !segment || segment === '.' || segment === '..' || segment !== segment.trim())) return false;
   if (!/\.[a-z0-9][a-z0-9+_-]{0,31}$/i.test(segments.at(-1))) return false;
@@ -572,11 +664,11 @@ function validDocumentSnapshotScope(payload) {
 }
 
 function validPublicDocumentSnapshot(value) {
-  if (!isRecord(value) || Object.keys(value).some(key => !['id', 'kind', 'projectId', 'fileLabel', 'title', 'createdAt', 'textLength', 'sessionId'].includes(key))) return false;
+  if (!isRecord(value) || Object.keys(value).some(key => !PUBLIC_SNAPSHOT_FIELDS.has(key))) return false;
   if (!nonEmpty(value.id) || value.id.length > 128 || !['manual', 'automatic', 'rescue'].includes(value.kind)) return false;
   if (!nonEmpty(value.projectId) || value.projectId.length > 256 || !nonEmpty(value.fileLabel) || value.fileLabel.length > 240) return false;
   if (typeof value.title !== 'string' || value.title.length > 120 || !Number.isFinite(value.createdAt) || value.createdAt < 0) return false;
-  if (!Number.isInteger(value.textLength) || value.textLength < 0 || value.textLength > 1_000_000) return false;
+  if (!Number.isInteger(value.textLength) || value.textLength < 0 || value.textLength > L.MAX_EDITOR_TRANSACTION_CHARS) return false;
   return value.sessionId == null || (nonEmpty(value.sessionId) && value.sessionId.length <= 256);
 }
 
@@ -589,26 +681,28 @@ function validRegistryMutation(value, { allowSelect = false } = {}) {
 }
 
 function validPreparedChanges(changes, textLength) {
-  if (!Array.isArray(changes) || changes.length === 0 || changes.length > 128) return false;
+  if (!Array.isArray(changes) || changes.length === 0 || changes.length > L.MAX_PREPARED_CHANGES) return false;
   let insertedChars = 0;
   let previousTo = 0;
   for (let index = 0; index < changes.length; index++) {
     const change = changes[index];
     if (!isRecord(change) || Object.keys(change).some(field => !['from', 'to', 'insert'].includes(field))) return false;
-    if (!Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < 0 || change.to < change.from || change.to > textLength || typeof change.insert !== 'string') return false;
+    const validRange = Number.isInteger(change.from) && Number.isInteger(change.to)
+      && change.from >= 0 && change.to >= change.from && change.to <= textLength;
+    if (!validRange || typeof change.insert !== 'string') return false;
     if (index > 0 && change.from < previousTo) return false;
     previousTo = change.to;
     insertedChars += change.insert.length;
-    if (insertedChars > 1_000_000) return false;
+    if (insertedChars > L.MAX_PREPARED_INSERT_CHARS) return false;
   }
   return true;
 }
 
 function validDiffPreview(preview) {
   if (!isRecord(preview) || Object.keys(preview).some(field => !['kind', 'fileLabel', 'additions', 'deletions', 'hunks'].includes(field))) return false;
-  if (preview.kind !== 'unified-diff' || !nonEmpty(preview.fileLabel) || preview.fileLabel.length > 240) return false;
+  if (preview.kind !== 'unified-diff' || !nonEmpty(preview.fileLabel) || preview.fileLabel.length > L.MAX_FILE_LABEL_CHARS) return false;
   if (!Number.isInteger(preview.additions) || preview.additions < 0 || !Number.isInteger(preview.deletions) || preview.deletions < 0) return false;
-  if (!Array.isArray(preview.hunks) || preview.hunks.length === 0 || preview.hunks.length > 256) return false;
+  if (!Array.isArray(preview.hunks) || preview.hunks.length === 0 || preview.hunks.length > L.MAX_DIFF_HUNKS) return false;
   let rowCount = 0;
   let textChars = 0;
   for (const hunk of preview.hunks) {
@@ -623,10 +717,47 @@ function validDiffPreview(preview) {
       if ((row.kind === 'insert' && row.oldLine != null) || (row.kind === 'delete' && row.newLine != null)) return false;
       rowCount += 1;
       textChars += row.text.length;
-      if (rowCount > 5_000 || textChars > 512_000) return false;
+      if (rowCount > L.MAX_DIFF_ROWS || textChars > L.MAX_DIFF_TEXT_CHARS) return false;
     }
   }
   return preview.additions + preview.deletions > 0;
+}
+
+function validSessionUpdatePayload(payload) {
+  return nonEmpty(payload.sessionId)
+    && (payload.name == null || typeof payload.name === 'string')
+    && (payload.messages == null || Array.isArray(payload.messages))
+    && (payload.userRenamed == null || typeof payload.userRenamed === 'boolean')
+    && (payload.autoName == null || typeof payload.autoName === 'boolean');
+}
+
+function validRunStartOptions(payload) {
+  return (payload.settings == null || isRecord(payload.settings))
+    && (payload.modelConfig == null || isRecord(payload.modelConfig))
+    && (payload.attachments == null || isRecord(payload.attachments));
+}
+
+function validStreamBatchItems(items) {
+  return Array.isArray(items) && items.length <= 256
+    && items.every(item => isRecord(item) && ['content', 'reasoning'].includes(item.channel) && typeof item.text === 'string');
+}
+
+function validToolCallList(calls) {
+  return Array.isArray(calls) && calls.length <= 64
+    && calls.every(call => isRecord(call) && nonEmpty(call.id) && nonEmpty(call.name) && isRecord(call.args));
+}
+
+function validArgumentSummary(payload) {
+  return Number.isInteger(payload.argumentChars) && payload.argumentChars >= payload.arguments.length
+    && typeof payload.argumentsTruncated === 'boolean'
+    && payload.argumentsTruncated === (payload.argumentChars > payload.arguments.length);
+}
+
+function validPreparedEditFields(payload) {
+  return typeof payload.expectedText === 'string' && payload.expectedText.length <= L.MAX_EDITOR_TRANSACTION_CHARS
+    && nonEmpty(payload.expectedEditorToken) && payload.expectedEditorToken.length <= L.MAX_EDITOR_TOKEN_CHARS
+    && nonEmpty(payload.expectedFileLabel) && payload.expectedFileLabel.length <= L.MAX_FILE_LABEL_CHARS
+    && validPreparedChanges(payload.changes, payload.expectedText.length) && nonEmpty(payload.callId);
 }
 
 function invalid(code, message, path = '$') {

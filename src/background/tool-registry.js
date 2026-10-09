@@ -102,7 +102,9 @@ export function validateCustomToolRecords(tools) {
     if (!/^[A-Za-z0-9._:-]{1,128}$/.test(id)) errors.push(registryError('INVALID_TOOL_ID', name, 'Custom tool id is missing or invalid.'));
     else if (seenIds.has(id)) errors.push(registryError('DUPLICATE_TOOL_ID', name, 'Custom tool ids must be unique.'));
     else seenIds.add(id);
-    if (!/^[A-Za-z][A-Za-z0-9_]{1,40}$/.test(name)) errors.push(registryError('INVALID_TOOL_NAME', name, 'Function name must be 2-41 letters, digits, or underscores and start with a letter.'));
+    if (!/^[A-Za-z][A-Za-z0-9_]{1,40}$/.test(name)) {
+      errors.push(registryError('INVALID_TOOL_NAME', name, 'Function name must be 2-41 letters, digits, or underscores and start with a letter.'));
+    }
     if (reserved.has(lower)) errors.push(registryError('RESERVED_TOOL_NAME', name, `Custom tool conflicts with built-in tool "${name}".`));
     if (seen.has(lower)) errors.push(registryError('DUPLICATE_TOOL_NAME', name, `Custom tool conflicts with "${seen.get(lower)}".`));
     else seen.set(lower, name);

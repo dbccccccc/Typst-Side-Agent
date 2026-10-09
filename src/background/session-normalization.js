@@ -117,10 +117,17 @@ function normalizeMessage(message, options = {}) {
     if (updates.length) out.editorStateUpdates = updates;
   }
   if (message.role === 'user' && message.sentAttachments != null) {
-    if (!message.sentAttachments || typeof message.sentAttachments !== 'object' || Array.isArray(message.sentAttachments)) return failure('Sent attachments must be an object.');
+    if (!message.sentAttachments || typeof message.sentAttachments !== 'object' || Array.isArray(message.sentAttachments)) {
+      return failure('Sent attachments must be an object.');
+    }
     out.sentAttachments = normalizeSentAttachments(message.sentAttachments);
   }
   if (message.role === 'assistant') {
+    // The originating run id lets the worker and panel reconcile the same turn exactly.
+    if (message.runId != null) {
+      const runId = cleanId(message.runId);
+      if (runId) out.runId = runId;
+    }
     if (message.responseStatus != null && !RESPONSE_STATUSES.has(message.responseStatus)) {
       return failure('Assistant response status is invalid.');
     }

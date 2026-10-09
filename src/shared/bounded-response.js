@@ -1,4 +1,5 @@
 import { raceWithSignal } from './abort.js';
+import { codedError } from './errors.js';
 
 /** Read a response body without allowing the network stream to exceed maxBytes. */
 export async function readResponseTextBounded(response, options = {}) {
@@ -7,11 +8,11 @@ export async function readResponseTextBounded(response, options = {}) {
   const errorCode = options.errorCode || 'RESPONSE_TOO_LARGE';
   const errorMessage = options.errorMessage || `Response exceeds the ${maxBytes}-byte limit.`;
   const declared = Number(response?.headers?.get?.('Content-Length'));
-  if (Number.isFinite(declared) && declared > maxBytes) throw coded(errorCode, errorMessage);
+  if (Number.isFinite(declared) && declared > maxBytes) throw codedError(errorCode, errorMessage);
 
   if (!response?.body?.getReader) {
     const text = await raceWithSignal(response.text(), options.signal);
-    if (new TextEncoder().encode(text).byteLength > maxBytes) throw coded(errorCode, errorMessage);
+    if (new TextEncoder().encode(text).byteLength > maxBytes) throw codedError(errorCode, errorMessage);
     return text;
   }
 
@@ -30,7 +31,7 @@ export async function readResponseTextBounded(response, options = {}) {
       }
       if (!value) continue;
       bytes += value.byteLength;
-      if (bytes > maxBytes) throw coded(errorCode, errorMessage);
+      if (bytes > maxBytes) throw codedError(errorCode, errorMessage);
       text += decoder.decode(value, { stream: true });
     }
     return text;
@@ -41,10 +42,4 @@ export async function readResponseTextBounded(response, options = {}) {
       try { reader.releaseLock?.(); } catch { /* no lock to release */ }
     }
   }
-}
-
-function coded(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
 }

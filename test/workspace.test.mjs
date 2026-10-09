@@ -6,10 +6,17 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const bridgeSource = await readFile(resolve(root, 'src/content/bridge-protocol.js'), 'utf8');
 const source = await readFile(resolve(root, 'src/content/workspace.js'), 'utf8');
 
 function loadExtractor() {
-  const context = vm.createContext({ console, window: { innerWidth: 1400, innerHeight: 900 } });
+  const context = vm.createContext({
+    console, Date, Math,
+    crypto: { randomUUID: () => 'uuid' },
+    window: { innerWidth: 1400, innerHeight: 900 }
+  });
+  // The bridge adapter publishes the shared runtime that the workspace scraper relies on.
+  vm.runInContext(bridgeSource, context, { filename: 'bridge-protocol.js' });
   vm.runInContext(source, context, { filename: 'workspace.js' });
   return context.__typstAgentWorkspaceExtract;
 }

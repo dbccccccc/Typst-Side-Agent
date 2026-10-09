@@ -13,7 +13,11 @@ export function validateEndpointUrl(input, options = {}) {
     ? options.insecureConfirmedOrigin
     : '';
   if (options.insecureConfirmed !== true && confirmedOrigin !== url.origin) {
-    return fail('INSECURE_CONFIRMATION_REQUIRED', `HTTP sends credentials and project-derived data without transport encryption. Confirm this exact origin to continue: ${url.origin}`, { origin: url.origin });
+    return fail(
+      'INSECURE_CONFIRMATION_REQUIRED',
+      `HTTP sends credentials and project-derived data without transport encryption. Confirm this exact origin to continue: ${url.origin}`,
+      { origin: url.origin }
+    );
   }
   return { ok: true, url: url.toString(), origin: url.origin, insecure: true, loopback: false };
 }

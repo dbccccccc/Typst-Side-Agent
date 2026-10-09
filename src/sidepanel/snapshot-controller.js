@@ -1,4 +1,5 @@
 import { PROTOCOL } from '../shared/protocol.js';
+import { svgIcon } from './chat-dom.js';
 
 const KIND_LABELS = Object.freeze({
   manual: 'Saved',
@@ -184,7 +185,7 @@ export function createSnapshotController({
     remove.className = 'snapshot-item-action snapshot-delete-action';
     remove.title = 'Delete snapshot';
     remove.setAttribute('aria-label', `Delete ${snapshot.title || 'snapshot'}`);
-    remove.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>';
+    remove.innerHTML = svgIcon(13, 2, '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>');
     remove.addEventListener('click', () => {
       try { openDeleteDialog(snapshot); }
       catch (error) { setStatus(`Snapshot delete confirmation failed: ${error?.message || String(error)}`, true); }
@@ -284,7 +285,8 @@ export function createSnapshotController({
     pendingRestore = null;
     layer.dataset.dialogMode = 'delete';
     title.textContent = 'Delete this snapshot?';
-    subtitle.textContent = `${snapshot?.title || 'Document snapshot'} · ${snapshot?.fileLabel || 'Current Typst document'} · ${formatSnapshotDate(snapshot?.createdAt)}`;
+    const target = snapshot?.fileLabel || 'Current Typst document';
+    subtitle.textContent = `${snapshot?.title || 'Document snapshot'} · ${target} · ${formatSnapshotDate(snapshot?.createdAt)}`;
     const warning = document.createElement('div');
     warning.className = 'snapshot-dialog-note is-danger';
     warning.textContent = 'This permanently removes the saved document copy. It cannot be restored after deletion.';
@@ -310,7 +312,9 @@ export function createSnapshotController({
     if (!snapshotId || pendingRestore?.noChanges || busy || isLocked()) return;
     const restoreScope = pendingRestore.requestScope;
     const currentScope = getScope();
-    if (!restoreScope || currentScope?.tabId !== restoreScope.tabId || currentScope?.projectId !== restoreScope.projectId || currentScope?.sessionId !== restoreScope.sessionId) {
+    const sameScope = !!restoreScope && currentScope?.tabId === restoreScope.tabId
+      && currentScope?.projectId === restoreScope.projectId && currentScope?.sessionId === restoreScope.sessionId;
+    if (!sameScope) {
       closeDialog();
       setStatus('The active Typst project or chat changed. Open the snapshot again before restoring.', true);
       return;

@@ -7,8 +7,8 @@ substitute for the packaged-artifact test.
 
 ## Prerequisites
 
-- Node.js 22.13 or newer (CI tests Node 22.13 and Node 24 LTS)
-- npm with a clean `npm ci`
+- Node.js 24.15 or newer (CI tests Node 24.15 and the latest Node 24 LTS)
+- npm with a clean `npm ci` (this installs jsdom for the side-panel DOM tests)
 - The Chromium revision installed by the pinned `playwright-core` dependency
 
 Install exact development dependencies:
@@ -28,20 +28,21 @@ npm run verify
 1. `npm run lint` — correctness-oriented ESLint rules for Node, browser, and
    extension globals.
 2. `npm run check` — syntax checks for non-vendored source modules.
-3. `npm run check:imports` — missing imports, import cycles, raw protocol
-   dispatch literals, and the dependency-free shared-protocol leaf.
-4. `npm run vendor:verify` — exact Marked/DOMPurify source and provenance
+3. `npm run check:imports` — missing imports, import cycles, layer boundaries,
+   raw protocol dispatch literals, and the dependency-free shared leaves.
+4. `npm run check:bridge` — the generated shared-runtime block in
+   `src/content/bridge-protocol.js` matches `src/shared/page-limits.js` and
+   `src/shared/active-file.js`.
+5. `npm run check:lines` — no source or script line exceeds 160 characters.
+6. `npm run vendor:verify` — exact Marked/DOMPurify source and provenance
    verification.
-5. `npm run coverage` — all root Node suites under coverage, with focused line
-   floors for the agent, provider/MCP transports, storage/schema policy, and
-   browser-facing float, registry, run, import, and transition controllers.
+7. `npm run coverage` — all root Node suites under coverage, with per-module
+   line floors for the agent run loop and tool runners, transports and
+   validation, every storage store, and the side-panel send flow and renderer
+   modules.
 
 Use `npm test` as the faster standalone developer command when coverage is not
-needed. Coverage percentages include modules loaded by the root Node suites;
-browser entry points are additionally protected by extracted controller tests
-and the packaged-browser smoke below.
-
-Also run before handoff:
+needed. Also run before handoff:
 
 ```bash
 git diff --check
@@ -55,12 +56,14 @@ advisories rather than excluding all development dependencies.
 
 ## Test suites
 
-`npm test` uses `node:test` and currently covers:
+`npm test` uses `node:test` and covers:
 
 - provider SSE framing across arbitrary byte boundaries, reasoning dialects,
   malformed records, tool-call bounds, HTTP errors, and cancellation;
 - independent agent runs, captured-tab routing, Ask/Auto approve editor policy,
-  external approvals, cancellation, and ordered terminal events;
+  external approvals, cancellation, ordered terminal events, and the paging
+  contract of `read_document` against an emulated page adapter;
+- worker/panel transcript reconciliation by run id;
 - edit preparation for all five editor tools, unified hunk generation, inert
   diff rendering, exact editor/text/file commit guards, and stale-preview rejection;
 - one-snapshot multi-edit runs, checkpoint state/retention, hash-conflict
@@ -77,6 +80,16 @@ advisories rather than excluding all development dependencies.
   discovery caching, metadata, response limits, timeouts, and cancellation;
 - transactional session create/update/delete, legacy migration, bounded
   thumbnails/results, malformed imports, storage status, and trusted access;
+- the generated bridge block: freshness, parity of path normalization, labels,
+  and limits between the page runtime and the worker, and idempotent re-injection;
+- side-panel rendering against a jsdom window (`*.dom.test.mjs`): hostile
+  Markdown sanitization, transcript rendering, inert streaming segments, tool
+  blocks, preflight and approval banners correlated to the active run, the
+  in-panel Revert confirmation and outcome, and the snapshot menu with its
+  restore and delete dialogs;
+- the Send flow with fakes: capture, identity re-checks, reservation,
+  stop-before-dispatch, rejected or thrown starts, and stop-while-streaming;
+- the quick-attach queue: readiness, ordering, deduplication, and worker drain;
 - stream batching, frame/event controller behavior, and absence of the old
   continuous main-world polling interval;
 - ordered MAIN-world recovery through web-accessible extension files when an
@@ -89,19 +102,21 @@ Focused examples:
 
 ```bash
 node --test test/agent-integration.test.mjs
+node --test test/chat-render.dom.test.mjs test/send-controller.test.mjs
 node --test test/edit-preview.test.mjs test/edit-diff-render.test.mjs
 node --test test/edit-revert.test.mjs test/chat-checkpoint.test.mjs
 node --test test/document-snapshots.test.mjs test/storage.test.mjs
 node --test test/tool-validation.test.mjs test/tool-policy.test.mjs
 node --test test/provider.test.mjs test/mcp-transport.test.mjs
-node --test test/storage.test.mjs
-node --test test/protocol.test.mjs test/stream-batching.test.mjs
+node --test test/protocol.test.mjs test/bridge-shared.test.mjs
 node --test test/package.test.mjs
 ```
 
 Add a focused regression whenever a defect has a reproducible input. Browser
 adapters should expose pure or injected-adapter seams so cancellation, malformed
 input, and concurrency can be tested without relying only on manual QA.
+Side-panel rendering tests belong in `*.dom.test.mjs` files, which lint with
+browser globals and build a jsdom window from the shipped `index.html`.
 
 ## Packaged browser smoke
 
@@ -120,10 +135,10 @@ The smoke test does not use the source checkout as the extension directory. It:
 6. streams a local intercepted provider response through the real agent path;
 7. verifies the editor permission control defaults to Ask, persists Auto approve,
    restores Ask, then drives a real editor tool call and verifies both the
-   side-panel unified diff and 28 visible, ordered insertion rows in the
-   read-only editor diff surface; confirms proposed text stays outside the
-   editable source and no CodeMirror line is decorated, clicks Apply, confirms
-   the buffer changes, and confirms the diff surface is removed;
+   side-panel unified diff and the ordered insertion rows in the read-only
+   editor diff surface; confirms proposed text stays outside the editable source
+   and no CodeMirror line is decorated, clicks Apply, confirms the buffer
+   changes, and confirms the diff surface is removed;
 8. verifies live and imported hostile Markdown cannot create active elements,
    unsafe links, or remote image requests, and verifies plain-text fallback;
 9. intentionally persists a stale main-world registration, terminates the MV3
@@ -158,8 +173,8 @@ npm run package:check
 `npm run package` is the only packaging implementation. It reads one canonical
 root set, rejects symlinks/hidden/traversal/sensitive paths, verifies manifest
 and side-panel references, verifies local links in every packaged Markdown
-file, enforces exact `manifest.json`/`package.json` version parity, optionally enforces a release
-tag, sorts entries, and fixes ZIP timestamps/permissions.
+file, enforces exact `manifest.json`/`package.json` version parity, optionally
+enforces a release tag, sorts entries, and fixes ZIP timestamps/permissions.
 
 `package:check` compares the archive's exact ordered entry set with the
 canonical set and then rebuilds it byte-for-byte. For the release gate, also
@@ -174,9 +189,9 @@ npm run package:check
 ```
 
 The artifact includes manifest, source, exact third-party license texts, bundled
-Typst docs, icons, public project/release/security documents, and the project
-license. It excludes tests, dependencies, workflows, git data, credentials,
-browser profiles, internal planning material, and logs.
+Typst docs and the user guide, icons, public project/release/security documents,
+and the project license. It excludes tests, dependencies, workflows, git data,
+credentials, browser profiles, internal planning material, and logs.
 
 ## Manual pre-release QA
 
@@ -271,14 +286,15 @@ the side panel and service worker.
   action and restores the document to its state before the first call.
   Clicking it must open an in-panel confirmation with **Cancel** and **Revert
   changes** actions; no native browser dialog should open, and Cancel must leave
-  the document untouched. Confirming an older response reverts later same-chat responses newest-first and
-  marks every affected response **Changes reverted**. The action is disabled
-  during another run. Switching project/file/session, inserting manual work
-  between checkpoints, or breaking any step must stop there without touching
-  unverified older text; completed newer steps stay reverted and an error is
-  shown. Reload around edit commit and revert commit, then retry to verify
-  `prepared`/`reverting` recovery. On the next turn, confirm the agent knows all
-  successfully reverted responses are no longer current.
+  the document untouched. Confirming an older response reverts later same-chat
+  responses newest-first and marks every affected response **Changes reverted**.
+  The action is disabled during another run. Switching project/file/session,
+  inserting manual work between checkpoints, or breaking any step must stop
+  there without touching unverified older text; completed newer steps stay
+  reverted and an error is shown. Reload around edit commit and revert commit,
+  then retry to verify `prepared`/`reverting` recovery. On the next turn,
+  confirm the agent knows all successfully reverted responses are no longer
+  current.
 - [ ] Complete an agent response and verify one compact **Snapshot** action
   appears beside **Revert** on that response, with no snapshot action in the
   composer. Cancelled, failed, and partial responses must not receive the
@@ -294,11 +310,12 @@ the side panel and service worker.
   panel with **Cancel** and **Delete** actions. No native browser confirmation
   dialog should open. Cancel preserves the point; Delete removes it and returns
   to the refreshed recovery list.
-- [ ] Continue without changing the document and verify the response snapshot is replaced
-  after the next full response. Change the document before continuing, and also
-  let the next agent edit it; in each case the prior automatic snapshot must be
-  removed on divergence. Cancellation/error must not create a new automatic
-  snapshot. **Before restore** snapshots must survive chat deletion.
+- [ ] Continue without changing the document and verify the response snapshot
+  is replaced after the next full response. Change the document before
+  continuing, and also let the next agent edit it; in each case the prior
+  automatic snapshot must be removed on divergence. Cancellation/error must not
+  create a new automatic snapshot. **Before restore** snapshots must survive
+  chat deletion.
 
 ### Endpoint, custom-tool, and MCP policy
 
@@ -323,11 +340,8 @@ the side panel and service worker.
   auto-name, export, and import work across projects. With auto-name enabled,
   every send refreshes the generated title. A failed title request shows a
   copyable, auto-collapsing error at the top without stopping the main response.
-  A reasoning model must receive its configured effort and name from final text
-  after thinking. Only `choices[0].message.content` is accepted; reasoning,
-  legacy completion, Responses API, and `<think>` fields must never become titles.
-  The title follows the latest user's language or explicitly requested output
-  language and must not default to English because the title prompt is English.
+  Only `choices[0].message.content` is accepted as a title. The title follows
+  the latest user's language or explicitly requested output language.
 - [ ] Interrupt/reload during legacy migration and retry; the final v2 index and
   bodies contain every valid session exactly once.
 - [ ] Two overlapping renames/saves do not lose either session. A failed
@@ -337,10 +351,10 @@ the side panel and service worker.
   export; tool display summaries are bounded.
 - [ ] Storage usage and the 8 MiB warning render. Version-1 import remains
   display-compatible; malformed message/segment/image records are rejected.
-- [ ] Export JSON contains sessions only—no API keys, headers, endpoint trust,
+- [ ] Export JSON contains sessions only: no API keys, headers, endpoint trust,
   model/integration settings, checkpoint document bodies, snapshot bodies, or
-  local snapshot-restore context events. Importing a
-  response receipt shows revert as unavailable.
+  local snapshot-restore context events. Importing a response receipt shows
+  revert as unavailable.
 
 ## Release checklist
 
@@ -348,9 +362,10 @@ the side panel and service worker.
    packaged browser smoke twice, and builds the canonical artifact.
 2. Set the same `X.Y.Z` version in `manifest.json` and `package.json`; run
    `npm ci` so the lockfile agrees.
-3. Update README, ARCHITECTURE, PRIVACY, TESTING, and CHANGELOG for behavior or
-   data-flow changes. Update vendored code and license texts only through the
-   vendor script.
+3. Update README, the user guide, ARCHITECTURE, PRIVACY, TESTING, and CHANGELOG
+   for behavior or data-flow changes. Update vendored code and license texts
+   only through the vendor script, and regenerate the bridge block with
+   `npm run sync:bridge` after shared-leaf changes.
 4. Run locally:
 
    ```bash
@@ -365,7 +380,7 @@ the side panel and service worker.
    ```
 
 5. Confirm a second clean package run has the same SHA-256, then complete the
-   manual checklist against the extracted artifact—not the source tree.
+   manual checklist against the extracted artifact, not the source tree.
 6. Create tag `vX.Y.Z` at the reviewed commit. A mismatched tag causes the
    package command to fail before publishing.
 7. Publish a non-prerelease GitHub Release. Tag-only pushes and prereleases do

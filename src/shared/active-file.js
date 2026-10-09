@@ -1,8 +1,20 @@
+/**
+ * Project-file identity shared by the worker, the side panel, and (through the
+ * generated bridge copy) the main-world page adapter. This module must stay
+ * dependency-free so that copy can be produced mechanically.
+ */
 const MAX_PATH_CHARS = 240;
 const MAX_PROJECT_LABEL_CHARS = 160;
 const MAX_SOURCE_CHARS = 64;
 const CONFIDENCE_LEVELS = new Set(['high', 'medium', 'low']);
 const PROJECT_FILE_BASENAME_RE = /\.[a-z0-9][a-z0-9+_-]{0,31}$/i;
+
+/** Label used when the focused Typst file cannot be identified. */
+export const DEFAULT_EDIT_FILE_LABEL = 'Current Typst document';
+
+export function isProjectFileBasename(value) {
+  return typeof value === 'string' && PROJECT_FILE_BASENAME_RE.test(value);
+}
 
 export function normalizeProjectRelativePath(value) {
   if (typeof value !== 'string') return null;
@@ -43,9 +55,23 @@ export function sameActiveEditorFile(left, right) {
   return !!a && !!b && a.relativePath === b.relativePath;
 }
 
-export function activeEditorFileLabel(value, fallback = 'Current Typst document') {
+export function activeEditorFileLabel(value, fallback = DEFAULT_EDIT_FILE_LABEL) {
   const active = normalizeActiveEditorFile(value) || activeEditorFileFromContext(value);
   return active?.relativePath || fallback;
+}
+
+/**
+ * The focused-file label that guards every editor write. The worker computes it
+ * from a page context and the page computes it from its live workspace; both
+ * must run this exact function or stale-file checks would disagree.
+ */
+export function editorFileLabel(value) {
+  const activeFile = activeEditorFileFromContext(value);
+  if (activeFile) return activeFile.relativePath;
+  const workspace = value?.workspace && typeof value.workspace === 'object' ? value.workspace : value;
+  if (!workspace || typeof workspace !== 'object') return DEFAULT_EDIT_FILE_LABEL;
+  const candidates = [workspace.focused_element_file_hint, workspace.detail_path];
+  return candidates.map(normalizeProjectRelativePath).find(Boolean) || DEFAULT_EDIT_FILE_LABEL;
 }
 
 function boundedText(value, max) {

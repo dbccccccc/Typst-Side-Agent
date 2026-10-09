@@ -10,7 +10,7 @@ const graph = new Map();
 const errors = [];
 
 for (const file of files) {
-  const source = await readFile(file, 'utf8');
+  const source = stripGeneratedBlock(await readFile(file, 'utf8'));
   const dependencies = [];
   for (const match of source.matchAll(/(?:import|export)\s+(?:[^'";]+?\s+from\s+)?['"](\.[^'"]+)['"]/g)) {
     const target = resolve(dirname(file), match[1]);
@@ -27,7 +27,16 @@ for (const file of files) {
 }
 
 const protocolFile = resolve(srcRoot, 'shared', 'protocol.js');
-if ((graph.get(protocolFile) || []).length) errors.push('src/shared/protocol.js must remain dependency-free.');
+const pageLimitsFile = resolve(srcRoot, 'shared', 'page-limits.js');
+const activeFileFile = resolve(srcRoot, 'shared', 'active-file.js');
+if ((graph.get(protocolFile) || []).some(dependency => dependency !== pageLimitsFile)) {
+  errors.push('src/shared/protocol.js may import only the dependency-free src/shared/page-limits.js leaf.');
+}
+for (const leaf of [pageLimitsFile, activeFileFile]) {
+  if ((graph.get(leaf) || []).length) {
+    errors.push(`${label(leaf)} must remain dependency-free; the content bridge embeds a generated copy of it.`);
+  }
+}
 
 const allowedLayers = {
   shared: new Set(['shared']),
@@ -61,7 +70,9 @@ function visit(file, stack = []) {
 }
 for (const file of files) visit(file);
 
-const adapter = await readFile(resolve(srcRoot, 'content', 'bridge-protocol.js'), 'utf8');
+// Only the hand-written part of the bridge adapter may name protocol constants;
+// the generated shared-runtime block is checked separately by check:bridge.
+const adapter = stripGeneratedBlock(await readFile(resolve(srcRoot, 'content', 'bridge-protocol.js'), 'utf8'));
 for (const match of adapter.matchAll(/:\s*'([A-Z][A-Z0-9_]+)'/g)) {
   if (!Object.values(PROTOCOL).includes(match[1])) errors.push(`Page adapter constant is absent from shared protocol: ${match[1]}`);
 }
@@ -81,6 +92,12 @@ async function walk(directory) {
     else if (entry.isFile() && entry.name.endsWith('.js') && !entry.name.endsWith('.min.js')) out.push(path);
   }
   return out;
+}
+
+function stripGeneratedBlock(source) {
+  const begin = source.indexOf('// BEGIN GENERATED SHARED RUNTIME');
+  const end = source.indexOf('// END GENERATED SHARED RUNTIME');
+  return begin >= 0 && end > begin ? source.slice(0, begin) + source.slice(end) : source;
 }
 
 function label(file) {

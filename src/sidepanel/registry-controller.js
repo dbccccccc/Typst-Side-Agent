@@ -42,7 +42,9 @@ export function createRecordRegistryController({ getRecords, setRecords, persist
 
 /** Transactional controller for models and their active/auto-name references. */
 export function createModelRegistryController({ getSettings, setSettings, persist }) {
-  if (![getSettings, setSettings, persist].every(value => typeof value === 'function')) throw new TypeError('Model registry controller dependencies are required.');
+  if (![getSettings, setSettings, persist].every(value => typeof value === 'function')) {
+    throw new TypeError('Model registry controller dependencies are required.');
+  }
   let queue = Promise.resolve();
 
   function mutate(transform, mutation) {
@@ -60,7 +62,8 @@ export function createModelRegistryController({ getSettings, setSettings, persis
   function replace(models, overrides = {}) {
     const replacement = [...models];
     return mutate(current => {
-      const activeModelId = overrides.activeModelId ?? (replacement.some(model => model.id === current.activeModelId) ? current.activeModelId : replacement[0]?.id || null);
+      const keepActive = replacement.some(model => model.id === current.activeModelId);
+      const activeModelId = overrides.activeModelId ?? (keepActive ? current.activeModelId : replacement[0]?.id || null);
       const autoNameModelId = replacement.some(model => model.id === current.autoNameModelId) ? current.autoNameModelId : null;
       return { ...current, ...overrides, models: replacement, activeModelId, autoNameModelId };
     }, { type: 'replace', records: replacement });

@@ -1,15 +1,16 @@
 (function () {
   'use strict';
   const bridge = globalThis.__typstAgentBridgeProtocol;
-  if (!bridge) return;
+  const shared = globalThis.__typstAgentShared;
+  if (!bridge || !shared) return;
   if (globalThis.__typstAgentIsolatedLoaded) return;
   globalThis.__typstAgentIsolatedLoaded = true;
   const { TYPES } = bridge;
   const nonce = crypto.randomUUID();
   const pending = new Map();
-  const MAX_PENDING = 64;
-  const TIMEOUT_MS = 12000;
-  const MAIN_RECOVERY_DELAY_MS = 200;
+  const MAX_PENDING = shared.PAGE_LIMITS.MAX_PENDING_PAGE_REQUESTS;
+  const TIMEOUT_MS = shared.PAGE_LIMITS.PAGE_REQUEST_TIMEOUT_MS;
+  const MAIN_RECOVERY_DELAY_MS = shared.PAGE_LIMITS.MAIN_WORLD_RECOVERY_DELAY_MS;
   const MAIN_WORLD_FILES = Object.freeze([
     'src/content/bridge-protocol.js',
     'src/content/workspace.js',
