@@ -32,6 +32,6 @@
     "globals": "17.9.0",
     "jsdom": "30.1.2",
     "marked": "12.0.0",
-    "playwright-core": "1.62.1"
+    "playwright-core": "1.63.0"
   }
 }
