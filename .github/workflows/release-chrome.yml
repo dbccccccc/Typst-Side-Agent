@@ -2,21 +2,47 @@ name: Release to Chrome Web Store
 
 # Publishes only when a GitHub Release is published and is NOT marked pre-release.
 # Pre-releases (e.g. v1.0.0-beta.1) and tag-only pushes do not trigger this workflow.
+# A manual run republishes an existing published release tag, for example after a
+# store-side failure; it rebuilds and re-verifies that tag before publishing.
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published, non-prerelease release tag to rebuild and publish (for example v1.1.1)
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   build:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
+      - name: Confirm the manual run targets a published release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The tag must look like v1.2.3."
+            exit 1
+          fi
+          release_state="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          if [ "$release_state" != "false false" ]; then
+            echo "::error::$RELEASE_TAG is not a published, non-prerelease GitHub Release."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -34,8 +60,6 @@ jobs:
         run: npm run test:browser
 
       - name: Build extension zip
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: npm run package -- --expected-tag "$RELEASE_TAG"
       - run: npm run package:check
 
@@ -49,18 +73,123 @@ jobs:
     if: ${{ !github.event.release.prerelease }}
     needs: build
     runs-on: ubuntu-latest
-    # Approval and store credentials are requested only after verification.
+    # Approval and store credentials are requested only after verification. This job
+    # never checks out repository code: it receives only the verified ZIP artifact.
     environment: chrome-web-store
+    concurrency:
+      group: chrome-web-store-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Lets this job alone exchange its GitHub OIDC token for a short-lived Google
+      # access token through Workload Identity Federation. No key is stored.
+      id-token: write
     steps:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: typst-side-agent-release
 
-      - name: Upload and publish to Chrome Web Store
-        uses: browser-actions/release-chrome-extension@bde2f9ad09b20a52d4e71eca4a9daf99d412a8d9 # v0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
-          extension-path: typst-side-agent.zip
-          oauth-client-id: ${{ secrets.CHROME_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
-          oauth-refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          node-version: '24'
+
+      - name: Authenticate as the Chrome Web Store service account
+        id: google-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 900s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Upload and publish to Chrome Web Store
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CWS_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          PACKAGE_PATH: typst-side-agent.zip
+        run: |
+          node --input-type=module <<'NODE'
+          // Chrome Web Store API v2: upload the package, wait for processing, submit it.
+          import { appendFile, readFile } from 'node:fs/promises';
+
+          const API = 'https://chromewebstore.googleapis.com';
+          const POLL_INTERVAL_MS = 10000;
+          const POLL_LIMIT = 30;
+          const UPLOAD_IN_PROGRESS = new Set(['IN_PROGRESS', 'UPLOAD_IN_PROGRESS']);
+          const ACCEPTED_STATES = new Set(['PENDING_REVIEW', 'STAGED', 'PUBLISHED', 'PUBLISHED_TO_TESTERS']);
+
+          const env = process.env;
+          const command = text => String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+
+          class PublishError extends Error {
+            constructor(message, detail) {
+              super(message);
+              this.detail = detail;
+            }
+          }
+          function fail(message, detail) {
+            throw new PublishError(message, detail);
+          }
+
+          async function call(item, label, method, path, body, contentType) {
+            const headers = { Authorization: `Bearer ${env.CWS_ACCESS_TOKEN}` };
+            if (contentType) headers['Content-Type'] = contentType;
+            const response = await fetch(`${API}/${path.replace('{item}', item)}`, { method, headers, body });
+            const text = await response.text();
+            let json;
+            try { json = text ? JSON.parse(text) : {}; } catch { json = undefined; }
+            if (!response.ok || json === undefined) fail(`Chrome Web Store ${label} request failed with HTTP ${response.status}.`, text);
+            return json;
+          }
+
+          async function main() {
+            for (const name of ['CWS_ACCESS_TOKEN', 'CWS_PUBLISHER_ID', 'CWS_EXTENSION_ID', 'RELEASE_TAG', 'PACKAGE_PATH']) {
+              if (!env[name]) fail(`${name} is not set. Check the chrome-web-store environment secrets.`);
+            }
+            const expectedVersion = env.RELEASE_TAG.replace(/^v/, '');
+            const item = `publishers/${encodeURIComponent(env.CWS_PUBLISHER_ID)}/items/${encodeURIComponent(env.CWS_EXTENSION_ID)}`;
+
+            const upload = await call(item, 'upload', 'POST', 'upload/v2/{item}:upload', await readFile(env.PACKAGE_PATH));
+            let uploadState = upload.uploadState;
+            console.log(`Upload state: ${uploadState ?? 'missing'}`);
+            for (let attempt = 1; UPLOAD_IN_PROGRESS.has(uploadState) && attempt <= POLL_LIMIT; attempt += 1) {
+              await new Promise(resolve => { setTimeout(resolve, POLL_INTERVAL_MS); });
+              const status = await call(item, 'status', 'GET', 'v2/{item}:fetchStatus');
+              uploadState = status.lastAsyncUploadState;
+              console.log(`Upload state (check ${attempt}): ${uploadState ?? 'missing'}`);
+            }
+            if (uploadState !== 'SUCCEEDED') fail(`The package upload did not succeed (state: ${uploadState ?? 'missing'}).`, upload);
+            if (upload.crxVersion && upload.crxVersion !== expectedVersion) {
+              fail(`The store read version ${upload.crxVersion} from the package; expected ${expectedVersion}.`);
+            }
+
+            const request = JSON.stringify({ publishType: 'DEFAULT_PUBLISH' });
+            const submission = await call(item, 'publish', 'POST', 'v2/{item}:publish', request, 'application/json');
+            for (const warning of submission.warningInfo?.warnings ?? []) {
+              console.log(`::warning::${command(`${warning.reason}: ${warning.description}`)}`);
+            }
+            if (!ACCEPTED_STATES.has(submission.state)) {
+              fail(`The store did not accept the submission (state: ${submission.state ?? 'missing'}).`, submission);
+            }
+
+            console.log(`Submitted ${env.RELEASE_TAG} to the Chrome Web Store. Store state: ${submission.state}.`);
+            if (env.GITHUB_STEP_SUMMARY) {
+              const summary = `### Chrome Web Store\n\nSubmitted ${env.RELEASE_TAG}. Store state: \`${submission.state}\`.\n`;
+              await appendFile(env.GITHUB_STEP_SUMMARY, summary);
+            }
+          }
+
+          // Set the exit code instead of calling process.exit() so open sockets close cleanly.
+          try {
+            await main();
+          } catch (error) {
+            process.exitCode = 1;
+            console.log(`::error::${command(error.message)}`);
+            const detail = error instanceof PublishError ? error.detail : error.stack;
+            if (detail !== undefined) console.error(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2));
+          }
+          NODE

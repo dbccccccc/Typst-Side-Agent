@@ -96,7 +96,11 @@ advisories rather than excluding all development dependencies.
   already-open Typst tab never completes the normal nonce handshake;
 - manifest references, immutable workflow action pins, permissions, version
   parity, bridge order, deterministic package contents, forbidden paths, and
-  ZIP safety.
+  ZIP safety;
+- the release workflow's inline Chrome Web Store publish script, run against a
+  local mock of the store API: byte-exact upload, asynchronous upload polling,
+  HTTP and upload failures, version mismatch, rejected submissions, warnings,
+  missing secrets, and that the access token is never printed.
 
 Focused examples:
 
@@ -109,7 +113,7 @@ node --test test/document-snapshots.test.mjs test/storage.test.mjs
 node --test test/tool-validation.test.mjs test/tool-policy.test.mjs
 node --test test/provider.test.mjs test/mcp-transport.test.mjs
 node --test test/protocol.test.mjs test/bridge-shared.test.mjs
-node --test test/package.test.mjs
+node --test test/package.test.mjs test/release-publish.test.mjs
 ```
 
 Add a focused regression whenever a defect has a reproducible input. Browser
@@ -388,11 +392,85 @@ the side panel and service worker.
 8. The release workflow checks out the release tag, runs `npm ci`,
    `npm run verify`, two packaged browser smokes, packaging with `--expected-tag`,
    and `npm run package:check` in an unprivileged build job. Only the verified ZIP
-   artifact then enters the protected `chrome-web-store` publishing job. Configure
-   required reviewers and store credentials on that environment.
+   artifact then enters the protected `chrome-web-store` publishing job, which
+   checks out no repository code. That job signs in as the store service account
+   (see [Store publishing setup](#store-publishing-setup)), uploads the ZIP through
+   the Chrome Web Store API v2, waits for processing, and submits it for review.
 9. Verify the Chrome Web Store upload/review result and download the workflow
    artifact to confirm its SHA and contents match the reviewed release.
+10. If publishing fails after the release exists, fix the cause and run the
+    **Release to Chrome Web Store** workflow manually from `main` with the
+    release tag, for example `gh workflow run release-chrome.yml -f tag=vX.Y.Z`.
+    The manual run accepts only a published, non-prerelease release tag, and it
+    rebuilds and re-verifies that tag before publishing.
 
 All GitHub Actions are pinned to immutable 40-character commits and workflows
-default to `contents: read`. Any permission increase, action update, package-root
-change, or release-environment change requires explicit review.
+default to `contents: read`. Only the publishing job may request a GitHub OIDC
+token. Any permission increase, action update, package-root change, or
+release-environment change requires explicit review.
+
+## Store publishing setup
+
+Publishing uses a Google Cloud service account linked to the Chrome Web Store
+publisher, reached through Workload Identity Federation. GitHub exchanges the
+publishing job's OIDC token for a 15-minute Google access token with only the
+`https://www.googleapis.com/auth/chromewebstore` scope. No service-account key,
+OAuth client secret, or refresh token is stored, and no OAuth consent screen or
+brand verification is involved. The store allows one service account per
+publisher, and that account can manage every item the publisher owns.
+
+One-time setup, run in Google Cloud Shell by an owner of the Google Cloud
+project where the Chrome Web Store API is enabled:
+
+```bash
+PROJECT_ID="your-project-id"
+REPO_ID="1217659322"  # numeric id of dbccccccc/Typst-Side-Agent
+SA_NAME="chrome-web-store-publisher"
+
+gcloud config set project "$PROJECT_ID"
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud services enable chromewebstore.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com sts.googleapis.com
+
+gcloud iam service-accounts create "$SA_NAME" \
+  --display-name="Chrome Web Store publisher"
+
+gcloud iam workload-identity-pools create github \
+  --location=global --display-name="GitHub Actions"
+
+gcloud iam workload-identity-pools providers create-oidc typst-side-agent \
+  --location=global --workload-identity-pool=github \
+  --display-name="Typst Side Agent releases" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.environment=assertion.environment,attribute.ref=assertion.ref" \
+  --attribute-condition="assertion.repository_id == '${REPO_ID}' && assertion.environment == 'chrome-web-store' && (assertion.ref == 'refs/heads/main' || assertion.ref.startsWith('refs/tags/v'))"
+
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository_id/${REPO_ID}"
+
+echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/providers/typst-side-agent"
+echo "GCP_SERVICE_ACCOUNT=${SA_EMAIL}"
+```
+
+The attribute condition admits only jobs from this repository, by its numeric
+id so a renamed or recreated repository cannot match, that run in the
+`chrome-web-store` environment from `main` or a `v*` tag.
+
+Then:
+
+1. In the Chrome Web Store Developer Dashboard, open **Account** and add the
+   service account email under the service account section.
+2. Store the two printed values as secrets of the `chrome-web-store` environment:
+
+   ```bash
+   gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER --env chrome-web-store
+   gh secret set GCP_SERVICE_ACCOUNT --env chrome-web-store
+   ```
+
+3. Keep the `CHROME_EXTENSION_ID` and `CHROME_PUBLISHER_ID` secrets. The
+   publisher id is shown on the Developer Dashboard's **Account** page.
+4. Recommended: restrict the environment's deployment branches and tags to
+   `main` and `v*`, and add a required reviewer, so a publish waits for approval.

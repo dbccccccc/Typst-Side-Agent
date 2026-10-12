@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The release workflow can be run manually for an existing published,
+  non-prerelease release tag. It rebuilds and re-verifies that tag before
+  publishing, so a store-side failure can be retried without a new version.
+- A test runs the release workflow's Chrome Web Store publish script against a
+  local mock of the store API.
+
+### Changed
+
+- **Store publishing uses a service account.** The release workflow now signs
+  in to the Chrome Web Store API v2 as a Google Cloud service account through
+  Workload Identity Federation and receives a 15-minute access token. No OAuth
+  client secret or refresh token is stored. The expired refresh token that
+  failed the first 1.1.1 publish can no longer recur. One-time setup is
+  described under "Store publishing setup" in TESTING.md.
+
 ## [1.1.1] - 2026-10-09
 
 This is a maintenance release that restructures the codebase without changing

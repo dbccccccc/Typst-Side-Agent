@@ -84,9 +84,31 @@ test('workflows pin actions to commits, run the full gates, and keep publishing 
   assert.match(release, /environment:\s*chrome-web-store/);
   assert.match(release, /--expected-tag/);
   assert.match(release, /npm run package:check/);
-  assert.match(release, /RELEASE_TAG:\s*\$\{\{ github\.event\.release\.tag_name \}\}/);
-  assert.doesNotMatch(release, /run:\s*[^\n]*\$\{\{\s*github\.event\.release\.tag_name/, 'the tag reaches shell only through an env var');
+  assert.match(release, /^ {2}RELEASE_TAG:\s*\$\{\{ github\.event\.release\.tag_name \|\| inputs\.tag \}\}$/m);
+  for (const source of [/github\.event\.release\.tag_name/g, /inputs\.tag/g]) {
+    assert.equal((release.match(source) || []).length, 1, 'the tag reaches steps only through the RELEASE_TAG env var');
+  }
   assert.ok(release.indexOf('npm run verify') < release.indexOf('environment: chrome-web-store'), 'verification precedes publishing');
+});
+
+test('store publishing uses a short-lived service-account token in a job that runs no repository code', async () => {
+  const release = (await read('.github/workflows/release-chrome.yml')).replace(/\r\n/g, '\n');
+  const header = release.slice(0, release.indexOf('\njobs:'));
+  const build = release.slice(release.indexOf('\n  build:'), release.indexOf('\n  publish:'));
+  const publish = release.slice(release.indexOf('\n  publish:'));
+  assert.doesNotMatch(header, /id-token/, 'OIDC tokens are not granted workflow-wide');
+  assert.doesNotMatch(build, /id-token|secrets\./, 'the build job holds no store credentials');
+  assert.match(publish, /environment: chrome-web-store/);
+  assert.match(publish, /permissions:\n\s+contents: read\n(?:\s+#.*\n)*\s+id-token: write\n/);
+  assert.doesNotMatch(publish, /actions\/checkout|npm (?:ci|run)/, 'the publishing job runs no repository code');
+  assert.match(publish, /uses: google-github-actions\/auth@[0-9a-f]{40} /);
+  assert.match(publish, /token_format: access_token\n/);
+  assert.match(publish, /access_token_scopes: https:\/\/www\.googleapis\.com\/auth\/chromewebstore\n/);
+  assert.match(publish, /create_credentials_file: false\n/);
+  assert.match(publish, /export_environment_variables: false\n/);
+  assert.match(publish, /chromewebstore\.googleapis\.com/);
+  assert.doesNotMatch(release, /refresh[-_]token|client[-_]secret|credentials_json/i, 'no long-lived store credentials');
+  assert.doesNotMatch(publish.slice(publish.indexOf("<<'NODE'")), /\$\{\{/, 'the publish script receives values only through env vars');
 });
 
 // ---------- public documents ----------
