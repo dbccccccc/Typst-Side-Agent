@@ -27,7 +27,7 @@
     "check:lines": "node scripts/check-line-length.mjs"
   },
   "devDependencies": {
-    "dompurify": "3.4.13",
+    "dompurify": "3.4.16",
     "eslint": "10.8.1",
     "globals": "17.9.0",
     "jsdom": "30.1.2",
